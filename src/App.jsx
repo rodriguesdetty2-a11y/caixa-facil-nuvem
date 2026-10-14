@@ -1,4 +1,64 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { supabase, isSupabaseReady } from "./supabase";
+
+/* ══════════════════════════════════════
+   HOOK PARA ESTADO NA NUVEM (SUPABASE)
+   - Lê do Supabase ao carregar
+   - Escreve no Supabase a cada mudança
+   - Também salva no localStorage como backup
+══════════════════════════════════════ */
+function useCloudState(key, defaultValue) {
+  const [value, setValueRaw] = useState(() => {
+    try {
+      const s = localStorage.getItem(`caixafacil_${key}`);
+      return s ? JSON.parse(s) : defaultValue;
+    } catch { return defaultValue; }
+  });
+  const [loaded, setLoaded] = useState(!isSupabaseReady());
+
+  // Carrega do Supabase ao montar
+  useEffect(() => {
+    if (!isSupabaseReady()) {
+      setLoaded(true);
+      return;
+    }
+    let cancelled = false;
+    supabase
+      .from("app_state")
+      .select("value")
+      .eq("key", key)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          console.error(`[Supabase] Erro ao carregar ${key}:`, error);
+        } else if (data?.value !== undefined && data?.value !== null) {
+          setValueRaw(data.value);
+          try { localStorage.setItem(`caixafacil_${key}`, JSON.stringify(data.value)); } catch {}
+        }
+        setLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, [key]);
+
+  const setValue = useCallback((v) => {
+    setValueRaw((prev) => {
+      const val = typeof v === "function" ? v(prev) : v;
+      try { localStorage.setItem(`caixafacil_${key}`, JSON.stringify(val)); } catch {}
+      if (isSupabaseReady()) {
+        supabase
+          .from("app_state")
+          .upsert({ key, value: val }, { onConflict: "key" })
+          .then(({ error }) => {
+            if (error) console.error(`[Supabase] Erro ao salvar ${key}:`, error);
+          });
+      }
+      return val;
+    });
+  }, [key]);
+
+  return [value, setValue, loaded];
+}
 
 const PAYMENT_TYPES_PADRAO = [
   { key: "deposito",   label: "Depósito",       icon: "🏦", color: "#3B82F6" },
@@ -1823,25 +1883,13 @@ export default function App() {
   const [aba, setAba] = useState("entrada");
   const [fechamentoVer, setFechamentoVer] = useState(null);
 
-  const [formas, setFormasRaw] = useState(() => {
-    try { const s = localStorage.getItem("caixafacil_formas"); return s ? JSON.parse(s) : PAYMENT_TYPES_PADRAO; } catch { return PAYMENT_TYPES_PADRAO; }
-  });
-  const setFormas = (v) => { const val = typeof v === "function" ? v(formas) : v; setFormasRaw(val); try { localStorage.setItem("caixafacil_formas", JSON.stringify(val)); } catch {} };
-
-  const [vendedores, setVendedoresRaw] = useState(() => {
-    try { const s = localStorage.getItem("caixafacil_vendedores"); return s ? JSON.parse(s) : []; } catch { return []; }
-  });
-  const setVendedores = (v) => { const val = typeof v === "function" ? v(vendedores) : v; setVendedoresRaw(val); try { localStorage.setItem("caixafacil_vendedores", JSON.stringify(val)); } catch {} };
-
-  const [historico, setHistoricoRaw] = useState(() => {
-    try { const s = localStorage.getItem("caixafacil_historico"); return s ? JSON.parse(s) : []; } catch { return []; }
-  });
-  const setHistorico = (v) => { const val = typeof v === "function" ? v(historico) : v; setHistoricoRaw(val); try { localStorage.setItem("caixafacil_historico", JSON.stringify(val)); } catch {} };
-
-  const [cadastros, setCadastrosRaw] = useState(() => {
-    try { const s = localStorage.getItem("caixafacil_cadastros"); return s ? JSON.parse(s) : []; } catch { return []; }
-  });
-  const setCadastros = (v) => { const val = typeof v === "function" ? v(cadastros) : v; setCadastrosRaw(val); try { localStorage.setItem("caixafacil_cadastros", JSON.stringify(val)); } catch {} };
+  // Estado agora vem da NUVEM (Supabase). Mantém backup no localStorage.
+  const [formas, setFormas, formasLoaded] = useCloudState("formas", PAYMENT_TYPES_PADRAO);
+  const [vendedores, setVendedores, vendedoresLoaded] = useCloudState("vendedores", []);
+  const [historico, setHistorico, historicoLoaded] = useCloudState("historico", []);
+  const [cadastros, setCadastros, cadastrosLoaded] = useCloudState("cadastros", []);
+  const allLoaded = formasLoaded && vendedoresLoaded && historicoLoaded && cadastrosLoaded;
+  const nuvem = isSupabaseReady();
 
   const totalGeral = vendedores.reduce((s, v) => s + v.total, 0);
 
@@ -1908,18 +1956,33 @@ export default function App() {
     setAba("historico");
   };
 
+  // Tela de carregamento enquanto busca dados da nuvem
+  if (!allLoaded) {
+    return (
+      <div style={{ ...root, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 20, padding: 40 }}>
+        <div style={{ fontSize: 48 }}>🏪</div>
+        <div style={{ fontSize: 20, fontWeight: 800, color: "#F1F5F9" }}>CaixaFácil</div>
+        <div style={{ fontSize: 14, color: "#94A3B8" }}>☁️ Carregando dados da nuvem...</div>
+        <div style={{ width: 200, height: 4, background: "#1E293B", borderRadius: 2, overflow: "hidden" }}>
+          <div style={{ width: "40%", height: "100%", background: "#10B981", animation: "slide 1.2s ease-in-out infinite" }}></div>
+        </div>
+        <style>{`@keyframes slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }`}</style>
+      </div>
+    );
+  }
+
   return (
     <div style={root}>
       <div style={header}>
         <div>
           <div style={logo}>🏪 CaixaFácil</div>
-          <div style={subLogo}>Sistema de Prestação de Contas</div>
+          <div style={subLogo}>Sistema de Prestação de Contas · {nuvem ? "☁️ Nuvem" : "💾 Local"}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           {vendedores.length > 0 && (
             <>
-              <div style={{ fontSize: 11, color: "#10B981", background: "#052e16", border: "1px solid #10B98155", borderRadius: 8, padding: "5px 10px" }}>
-                💾 Salvo automaticamente
+              <div style={{ fontSize: 11, color: nuvem ? "#06B6D4" : "#10B981", background: nuvem ? "#083344" : "#052e16", border: `1px solid ${nuvem ? "#06B6D455" : "#10B98155"}`, borderRadius: 8, padding: "5px 10px" }}>
+                {nuvem ? "☁️ Sincronizado na nuvem" : "💾 Salvo automaticamente"}
               </div>
               <div style={totalGeralBox}>
                 <div style={{ fontSize: 10, color: "#64748B", marginBottom: 2, textTransform: "uppercase" }}>Total do Dia</div>
