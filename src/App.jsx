@@ -1,5 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase, isSupabaseReady } from "./supabase";
+import {
+  carregarUsuarioLogado,
+  salvarUsuarioLogado,
+  removerUsuarioLogado,
+  temConferentes,
+  criarConferente,
+  fazerLogin,
+  listarConferentes,
+  atualizarConferente,
+  mudarSenha,
+  removerConferente,
+} from "./auth";
 
 /* ══════════════════════════════════════
    HOOK PARA ESTADO NA NUVEM (SUPABASE)
@@ -700,7 +712,7 @@ function EntradaTab({ vendedores, setVendedores, formas, cadastros }) {
 /* ══════════════════════════════════════
    ABA 2 — PRESTAÇÃO DE CONTAS
 ══════════════════════════════════════ */
-function PrestaContasTab({ vendedores, setVendedores, formas }) {
+function PrestaContasTab({ vendedores, setVendedores, formas, currentUser }) {
   const [selectedId, setSelectedId] = useState("");
   const [entregue, setEntregue] = useState(initValores(formas));
   const [confirmado, setConfirmado] = useState(false);
@@ -731,6 +743,13 @@ function PrestaContasTab({ vendedores, setVendedores, formas }) {
       status: totalOk ? "ok" : totalSobrou ? "sobrou" : "faltou",
       porForma: prestacaoPorForma,
       data: new Date().toLocaleString("pt-BR"),
+      // NOVO: quem conferiu
+      conferente: currentUser ? {
+        id: currentUser.id,
+        nome: currentUser.nome,
+        usuario: currentUser.usuario,
+      } : null,
+      conferidoEm: new Date().toISOString(),
     };
     setVendedores((prev) =>
       prev.map((v) => v.id === Number(selectedId) ? { ...v, prestacao: resultado } : v)
@@ -782,8 +801,16 @@ function PrestaContasTab({ vendedores, setVendedores, formas }) {
 
         {/* Banner de prestação já confirmada */}
         {vendedor && confirmado && (
-          <div style={{ background: "#0D1F0D", border: "1px solid #10B98155", borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 13, color: "#10B981", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>✅ Prestação confirmada. Para corrigir um valor, clique em Editar.</span>
+          <div style={{ background: "#0D1F0D", border: "1px solid #10B98155", borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 13, color: "#10B981", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <div>✅ Prestação confirmada. Para corrigir um valor, clique em Editar.</div>
+              {vendedor.prestacao?.conferente && (
+                <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 3 }}>
+                  🕵️ Conferido por <strong style={{ color: "#F1F5F9" }}>{vendedor.prestacao.conferente.nome}</strong>
+                  {vendedor.prestacao.conferidoEm && <> em {new Date(vendedor.prestacao.conferidoEm).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</>}
+                </div>
+              )}
+            </div>
             <button style={{ ...btn, background: "#2563EB", fontSize: 11, padding: "5px 12px" }} onClick={() => setConfirmado(false)}>✏️ Editar</button>
           </div>
         )}
@@ -1046,6 +1073,13 @@ function ResumoTab({ vendedores, formas }) {
                     </div>
                   </div>
                 </div>
+                {p?.conferente && (
+                  <div style={{ marginTop: 10, fontSize: 11, color: "#94A3B8", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", borderTop: "1px solid #334155", paddingTop: 10 }}>
+                    <span>🕵️ Conferido por</span>
+                    <strong style={{ color: "#F1F5F9" }}>{p.conferente.nome}</strong>
+                    {p.conferidoEm && <span>em {new Date(p.conferidoEm).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -1295,6 +1329,7 @@ function ImpressaoTab({ vendedores, formas }) {
                 <th className="right">Total Entrada</th>
                 <th className="center">Prestação</th>
                 <th className="right">Diferença</th>
+                <th>Conferido por</th>
               </tr>
             </thead>
             <tbody>
@@ -1322,6 +1357,10 @@ function ImpressaoTab({ vendedores, formas }) {
                             {p.diferenca >= 0 ? "+" : ""}{fmt(p.diferenca)}
                           </span>}
                     </td>
+                    <td style={{ fontSize: 10 }}>
+                      {p?.conferente?.nome || "—"}
+                      {p?.conferidoEm && <div style={{ fontSize: 9, color: "#777" }}>{new Date(p.conferidoEm).toLocaleDateString("pt-BR")}</div>}
+                    </td>
                   </tr>
                 );
               })}
@@ -1337,6 +1376,7 @@ function ImpressaoTab({ vendedores, formas }) {
                   {totalDifPos > 0 && <div className="status-sobrou">+{fmt(totalDifPos)}</div>}
                   {totalDifNeg === 0 && totalDifPos === 0 && comPrestacao.length > 0 && <span className="status-ok">✅ OK</span>}
                 </td>
+                <td></td>
               </tr>
             </tbody>
           </table>
@@ -1414,6 +1454,7 @@ function ImpressaoTab({ vendedores, formas }) {
                   <th style={{ ...thP, textAlign: "right" }}>Total</th>
                   <th style={{ ...thP, textAlign: "center" }}>Prestação</th>
                   <th style={{ ...thP, textAlign: "right" }}>Diferença</th>
+                  <th style={thP}>🕵️ Conferente</th>
                 </tr>
               </thead>
               <tbody>
@@ -1435,6 +1476,9 @@ function ImpressaoTab({ vendedores, formas }) {
                       <td style={{ ...tdP, textAlign: "right", fontWeight: 700, color: cor }}>
                         {!p ? "—" : p.status === "ok" ? "R$ 0,00" : (p.diferenca >= 0 ? "+" : "") + fmt(p.diferenca)}
                       </td>
+                      <td style={{ ...tdP, fontSize: 10, color: "#555" }}>
+                        {p?.conferente?.nome || "—"}
+                      </td>
                     </tr>
                   );
                 })}
@@ -1452,6 +1496,7 @@ function ImpressaoTab({ vendedores, formas }) {
                     {totalDifPos > 0 && <div style={{ color: "#2563EB" }}>+{fmt(totalDifPos)}</div>}
                     {totalDifNeg === 0 && totalDifPos === 0 && comPrestacao.length > 0 && <span style={{ color: "#059669" }}>✅ OK</span>}
                   </td>
+                  <td style={tdP}></td>
                 </tr>
               </tbody>
             </table>
@@ -1877,11 +1922,353 @@ function HistoricoTab({ historico, setHistorico, formas, abrirFechamento, editar
 }
 
 /* ══════════════════════════════════════
+   TELA DE LOGIN
+══════════════════════════════════════ */
+function LoginScreen({ onLogin }) {
+  const [usuario, setUsuario] = useState("");
+  const [senha, setSenha] = useState("");
+  const [erro, setErro] = useState("");
+  const [carregando, setCarregando] = useState(false);
+
+  const entrar = async (e) => {
+    e?.preventDefault();
+    if (!usuario.trim() || !senha) return setErro("Preencha usuário e senha.");
+    setCarregando(true);
+    setErro("");
+    const { data, error } = await fazerLogin(usuario, senha);
+    setCarregando(false);
+    if (error) return setErro(error);
+    onLogin(data);
+  };
+
+  return (
+    <div style={{ ...root, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <form onSubmit={entrar} style={{ background: "#0F172A", border: "1px solid #1E293B", borderRadius: 14, padding: 32, width: "100%", maxWidth: 400 }}>
+        <div style={{ textAlign: "center", marginBottom: 24 }}>
+          <div style={{ fontSize: 48, marginBottom: 8 }}>🏪</div>
+          <h1 style={{ fontSize: 24, fontWeight: 800, color: "#F1F5F9", margin: 0 }}>CaixaFácil</h1>
+          <div style={{ fontSize: 13, color: "#64748B", marginTop: 4 }}>Entre com seu usuário</div>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <label style={labelStyle}>👤 Usuário</label>
+          <input
+            style={inputStyle}
+            type="text"
+            value={usuario}
+            onChange={(e) => setUsuario(e.target.value)}
+            placeholder="seu usuário"
+            autoFocus
+            autoComplete="username"
+          />
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
+          <label style={labelStyle}>🔑 Senha</label>
+          <input
+            style={inputStyle}
+            type="password"
+            value={senha}
+            onChange={(e) => setSenha(e.target.value)}
+            placeholder="sua senha"
+            autoComplete="current-password"
+          />
+        </div>
+
+        {erro && (
+          <div style={{ background: "#450a0a", border: "1px solid #EF444455", borderRadius: 8, padding: "10px 14px", color: "#FCA5A5", fontSize: 13, marginBottom: 16 }}>
+            ⚠️ {erro}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          disabled={carregando}
+          style={{ ...btn, background: "#10B981", width: "100%", fontSize: 15, padding: "12px", opacity: carregando ? 0.6 : 1 }}
+        >
+          {carregando ? "Entrando..." : "🔓 Entrar"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
+   TELA DE CONFIGURAÇÃO INICIAL
+   (quando ainda não tem nenhum conferente cadastrado)
+══════════════════════════════════════ */
+function SetupScreen({ onConfigurado }) {
+  const [nome, setNome] = useState("");
+  const [usuario, setUsuario] = useState("");
+  const [senha, setSenha] = useState("");
+  const [senha2, setSenha2] = useState("");
+  const [erro, setErro] = useState("");
+  const [carregando, setCarregando] = useState(false);
+
+  const criar = async (e) => {
+    e?.preventDefault();
+    if (!nome.trim()) return setErro("Digite seu nome completo.");
+    if (!usuario.trim()) return setErro("Digite um nome de usuário.");
+    if (senha.length < 4) return setErro("Senha deve ter pelo menos 4 caracteres.");
+    if (senha !== senha2) return setErro("As senhas não coincidem.");
+    setCarregando(true);
+    setErro("");
+    const { data, error } = await criarConferente({ nome, usuario, senha, admin: true });
+    setCarregando(false);
+    if (error) return setErro(error);
+    salvarUsuarioLogado({ id: data.id, nome: data.nome, usuario: data.usuario, admin: true, ativo: true });
+    onConfigurado({ id: data.id, nome: data.nome, usuario: data.usuario, admin: true, ativo: true });
+  };
+
+  return (
+    <div style={{ ...root, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <form onSubmit={criar} style={{ background: "#0F172A", border: "1px solid #1E293B", borderRadius: 14, padding: 32, width: "100%", maxWidth: 460 }}>
+        <div style={{ textAlign: "center", marginBottom: 24 }}>
+          <div style={{ fontSize: 48, marginBottom: 8 }}>🏪</div>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: "#F1F5F9", margin: 0 }}>Bem-vinda ao CaixaFácil!</h1>
+          <div style={{ fontSize: 13, color: "#64748B", marginTop: 6 }}>
+            Primeira vez por aqui. Vamos criar sua conta de <strong style={{ color: "#F97316" }}>administradora</strong>.
+          </div>
+        </div>
+
+        <div style={{ background: "#1E293B", border: "1px solid #F97316", borderRadius: 10, padding: "10px 14px", marginBottom: 20, fontSize: 12, color: "#F97316" }}>
+          🔐 Como administradora, você poderá criar e gerenciar os outros usuários (conferentes) depois.
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <label style={labelStyle}>👤 Seu nome completo</label>
+          <input style={inputStyle} type="text" value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex: Detty Rodrigues" autoFocus />
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <label style={labelStyle}>🔖 Nome de usuário (para login)</label>
+          <input style={inputStyle} type="text" value={usuario} onChange={(e) => setUsuario(e.target.value.toLowerCase().replace(/\s/g, ""))} placeholder="Ex: detty" autoComplete="off" />
+          <div style={{ fontSize: 10, color: "#64748B", marginTop: 3 }}>Sem espaços, só letras/números (vai ficar em minúsculo)</div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
+          <div>
+            <label style={labelStyle}>🔑 Senha</label>
+            <input style={inputStyle} type="password" value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="mín. 4 caracteres" autoComplete="new-password" />
+          </div>
+          <div>
+            <label style={labelStyle}>🔑 Repita a senha</label>
+            <input style={inputStyle} type="password" value={senha2} onChange={(e) => setSenha2(e.target.value)} placeholder="igual à de cima" autoComplete="new-password" />
+          </div>
+        </div>
+
+        {erro && (
+          <div style={{ background: "#450a0a", border: "1px solid #EF444455", borderRadius: 8, padding: "10px 14px", color: "#FCA5A5", fontSize: 13, marginBottom: 16 }}>
+            ⚠️ {erro}
+          </div>
+        )}
+
+        <button type="submit" disabled={carregando} style={{ ...btn, background: "#10B981", width: "100%", fontSize: 15, padding: "12px", opacity: carregando ? 0.6 : 1 }}>
+          {carregando ? "Criando conta..." : "✅ Criar minha conta"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
+   ABA CONFERENTES — Gerenciar usuários com login
+   (visível só para administradores)
+══════════════════════════════════════ */
+function ConferentesTab({ currentUser }) {
+  const [conferentes, setConferentes] = useState([]);
+  const [carregando, setCarregando] = useState(true);
+  const [novoNome, setNovoNome] = useState("");
+  const [novoUsuario, setNovoUsuario] = useState("");
+  const [novaSenha, setNovaSenha] = useState("");
+  const [novoAdmin, setNovoAdmin] = useState(false);
+  const [erro, setErro] = useState("");
+  const [sucesso, setSucesso] = useState("");
+  const [editandoSenhaId, setEditandoSenhaId] = useState(null);
+  const [senhaInput, setSenhaInput] = useState("");
+
+  const carregar = async () => {
+    setCarregando(true);
+    const lista = await listarConferentes();
+    setConferentes(lista);
+    setCarregando(false);
+  };
+
+  useEffect(() => { carregar(); }, []);
+
+  const adicionar = async () => {
+    setErro(""); setSucesso("");
+    if (!novoNome.trim()) return setErro("Digite o nome completo.");
+    if (!novoUsuario.trim()) return setErro("Digite um nome de usuário.");
+    if (novaSenha.length < 4) return setErro("Senha deve ter pelo menos 4 caracteres.");
+    const { error } = await criarConferente({ nome: novoNome, usuario: novoUsuario, senha: novaSenha, admin: novoAdmin });
+    if (error) return setErro(error);
+    setSucesso(`✅ Usuário ${novoNome} criado!`);
+    setNovoNome(""); setNovoUsuario(""); setNovaSenha(""); setNovoAdmin(false);
+    await carregar();
+    setTimeout(() => setSucesso(""), 3000);
+  };
+
+  const toggleAtivo = async (c) => {
+    if (c.id === currentUser.id) return alert("Você não pode desativar seu próprio usuário.");
+    await atualizarConferente(c.id, { ativo: !c.ativo });
+    await carregar();
+  };
+
+  const toggleAdmin = async (c) => {
+    if (c.id === currentUser.id) return alert("Você não pode remover seus próprios privilégios de admin.");
+    await atualizarConferente(c.id, { admin: !c.admin });
+    await carregar();
+  };
+
+  const salvarSenha = async (id) => {
+    if (senhaInput.length < 4) return alert("Senha deve ter pelo menos 4 caracteres.");
+    const { error } = await mudarSenha(id, senhaInput);
+    if (error) return alert("Erro: " + error);
+    setEditandoSenhaId(null); setSenhaInput("");
+    alert("✅ Senha atualizada!");
+  };
+
+  const excluir = async (c) => {
+    if (c.id === currentUser.id) return alert("Você não pode excluir seu próprio usuário.");
+    if (!confirm(`Excluir o usuário ${c.nome}? Esta ação não pode ser desfeita.`)) return;
+    const { error } = await removerConferente(c.id);
+    if (error) return alert("Erro: " + error);
+    await carregar();
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={card}>
+        <h2 style={cardTitle}>➕ Adicionar Conferente</h2>
+        <div style={{ fontSize: 12, color: "#64748B", marginBottom: 16 }}>
+          Pessoas que vão fazer login para conferir as prestações de contas.
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 12, marginBottom: 14 }}>
+          <div>
+            <label style={labelStyle}>👤 Nome completo</label>
+            <input style={inputStyle} value={novoNome} onChange={(e) => setNovoNome(e.target.value)} placeholder="Ex: João Paulo" />
+          </div>
+          <div>
+            <label style={labelStyle}>🔖 Usuário (login)</label>
+            <input style={inputStyle} value={novoUsuario} onChange={(e) => setNovoUsuario(e.target.value.toLowerCase().replace(/\s/g, ""))} placeholder="Ex: joaopaulo" autoComplete="off" />
+          </div>
+          <div>
+            <label style={labelStyle}>🔑 Senha inicial</label>
+            <input style={inputStyle} type="text" value={novaSenha} onChange={(e) => setNovaSenha(e.target.value)} placeholder="mín. 4 caracteres" autoComplete="new-password" />
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+          <input id="novoAdmin" type="checkbox" checked={novoAdmin} onChange={(e) => setNovoAdmin(e.target.checked)} style={{ width: 16, height: 16, cursor: "pointer" }} />
+          <label htmlFor="novoAdmin" style={{ fontSize: 13, color: "#F1F5F9", cursor: "pointer" }}>
+            🛡️ Administrador (pode gerenciar outros usuários)
+          </label>
+        </div>
+
+        {erro && <div style={{ background: "#450a0a", border: "1px solid #EF444455", borderRadius: 8, padding: "10px 14px", color: "#FCA5A5", fontSize: 13, marginBottom: 10 }}>⚠️ {erro}</div>}
+        {sucesso && <div style={{ background: "#052e16", border: "1px solid #10B98155", borderRadius: 8, padding: "10px 14px", color: "#10B981", fontSize: 13, marginBottom: 10 }}>{sucesso}</div>}
+
+        <button style={{ ...btn, background: "#10B981", width: "100%" }} onClick={adicionar}>
+          ➕ Criar Usuário
+        </button>
+      </div>
+
+      <div style={card}>
+        <h2 style={cardTitle}>👥 Conferentes Cadastrados ({conferentes.length})</h2>
+        {carregando ? (
+          <div style={{ color: "#64748B", textAlign: "center", padding: 20 }}>Carregando...</div>
+        ) : conferentes.length === 0 ? (
+          <div style={{ color: "#475569", textAlign: "center", padding: 20 }}>Nenhum conferente cadastrado ainda.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {conferentes.map((c) => (
+              <div key={c.id} style={{ background: c.ativo ? "#1E293B" : "#1A1A1A", border: `1px solid ${c.admin ? "#F9731655" : "#334155"}`, borderRadius: 12, padding: "14px 16px", opacity: c.ativo ? 1 : 0.5 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+                  <div>
+                    <div style={{ fontWeight: 700, color: "#F1F5F9", fontSize: 15 }}>
+                      👤 {c.nome}
+                      {c.admin && <span style={{ marginLeft: 8, fontSize: 10, background: "#F9731622", color: "#F97316", border: "1px solid #F9731655", borderRadius: 10, padding: "2px 8px" }}>🛡️ ADMIN</span>}
+                      {!c.ativo && <span style={{ marginLeft: 8, fontSize: 10, background: "#334155", color: "#94A3B8", borderRadius: 10, padding: "2px 8px" }}>DESATIVADO</span>}
+                      {c.id === currentUser.id && <span style={{ marginLeft: 8, fontSize: 10, background: "#10B98122", color: "#10B981", border: "1px solid #10B98155", borderRadius: 10, padding: "2px 8px" }}>VOCÊ</span>}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#64748B", marginTop: 3 }}>
+                      🔖 <code style={{ background: "#0F172A", padding: "1px 6px", borderRadius: 4 }}>{c.usuario}</code>
+                      {c.criado_em && <span style={{ marginLeft: 10 }}>· criado em {new Date(c.criado_em).toLocaleDateString("pt-BR")}</span>}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+                  {editandoSenhaId === c.id ? (
+                    <>
+                      <input style={{ ...inputStyle, width: 160, padding: "5px 10px", fontSize: 12 }} type="text" value={senhaInput} onChange={(e) => setSenhaInput(e.target.value)} placeholder="Nova senha" autoFocus />
+                      <button style={{ ...miniBtn, background: "#10B981" }} onClick={() => salvarSenha(c.id)}>✓ Salvar</button>
+                      <button style={{ ...miniBtn, background: "#374151" }} onClick={() => { setEditandoSenhaId(null); setSenhaInput(""); }}>Cancelar</button>
+                    </>
+                  ) : (
+                    <>
+                      <button style={{ ...miniBtn, background: "#2563EB" }} onClick={() => { setEditandoSenhaId(c.id); setSenhaInput(""); }}>🔑 Mudar senha</button>
+                      {c.id !== currentUser.id && (
+                        <>
+                          <button style={{ ...miniBtn, background: c.admin ? "#374151" : "#F97316" }} onClick={() => toggleAdmin(c)}>
+                            {c.admin ? "Remover admin" : "🛡️ Tornar admin"}
+                          </button>
+                          <button style={{ ...miniBtn, background: c.ativo ? "#78716C" : "#10B981" }} onClick={() => toggleAtivo(c)}>
+                            {c.ativo ? "⏸️ Desativar" : "▶️ Reativar"}
+                          </button>
+                          <button style={{ ...miniBtn, background: "#DC2626" }} onClick={() => excluir(c)}>🗑️ Excluir</button>
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
    APP PRINCIPAL
 ══════════════════════════════════════ */
 export default function App() {
   const [aba, setAba] = useState("entrada");
   const [fechamentoVer, setFechamentoVer] = useState(null);
+
+  // Autenticação
+  const [currentUser, setCurrentUser] = useState(() => carregarUsuarioLogado());
+  const [authEstado, setAuthEstado] = useState("verificando"); // "verificando" | "setup" | "login" | "ok"
+
+  // Verifica se precisa de setup ou login na primeira carga
+  useEffect(() => {
+    if (!isSupabaseReady()) {
+      setAuthEstado("ok"); // Sem nuvem = modo offline sem login
+      return;
+    }
+    (async () => {
+      const temAlgum = await temConferentes();
+      if (!temAlgum) {
+        setAuthEstado("setup");
+      } else if (!currentUser) {
+        setAuthEstado("login");
+      } else {
+        setAuthEstado("ok");
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const sair = () => {
+    if (!confirm("Deseja sair?")) return;
+    removerUsuarioLogado();
+    setCurrentUser(null);
+    setAuthEstado("login");
+  };
 
   // Estado agora vem da NUVEM (Supabase). Mantém backup no localStorage.
   const [formas, setFormas, formasLoaded] = useCloudState("formas", PAYMENT_TYPES_PADRAO);
@@ -1956,6 +2343,26 @@ export default function App() {
     setAba("historico");
   };
 
+  // Tela de "verificando autenticação" (muito rápido, só pisca)
+  if (authEstado === "verificando") {
+    return (
+      <div style={{ ...root, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 20, padding: 40 }}>
+        <div style={{ fontSize: 48 }}>🏪</div>
+        <div style={{ fontSize: 14, color: "#94A3B8" }}>Verificando...</div>
+      </div>
+    );
+  }
+
+  // Primeira vez usando o sistema — não tem conferente cadastrado
+  if (authEstado === "setup") {
+    return <SetupScreen onConfigurado={(u) => { setCurrentUser(u); setAuthEstado("ok"); }} />;
+  }
+
+  // Precisa fazer login
+  if (authEstado === "login" || !currentUser) {
+    return <LoginScreen onLogin={(u) => { setCurrentUser(u); setAuthEstado("ok"); }} />;
+  }
+
   // Tela de carregamento enquanto busca dados da nuvem
   if (!allLoaded) {
     return (
@@ -2002,6 +2409,21 @@ export default function App() {
               📅 {historico.length} fechamento(s) no histórico
             </div>
           )}
+          {currentUser && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#0F172A", border: "1px solid #1E293B", borderRadius: 8, padding: "6px 12px" }}>
+              <span style={{ fontSize: 12, color: "#F1F5F9" }}>
+                👋 Olá, <strong style={{ color: "#10B981" }}>{currentUser.nome.split(" ")[0]}</strong>
+                {currentUser.admin && <span style={{ marginLeft: 6, fontSize: 9, background: "#F9731622", color: "#F97316", border: "1px solid #F9731555", borderRadius: 8, padding: "1px 6px" }}>ADMIN</span>}
+              </span>
+              <button
+                onClick={sair}
+                style={{ background: "transparent", border: "1px solid #334155", borderRadius: 6, color: "#94A3B8", cursor: "pointer", padding: "3px 10px", fontSize: 11, fontWeight: 600 }}
+                title="Sair"
+              >
+                🚪 Sair
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -2021,6 +2443,11 @@ export default function App() {
           📅 Histórico
           {historico.length > 0 && <span style={{ marginLeft: 5, background: "#7C3AED", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 10, padding: "1px 6px" }}>{historico.length}</span>}
         </button>
+        {currentUser?.admin && (
+          <button style={aba === "conferentes" ? tabActive : tabInactive} onClick={() => setAba("conferentes")}>
+            🕵️ Conferentes
+          </button>
+        )}
         <button style={aba === "config" ? tabActive : tabInactive} onClick={() => setAba("config")}>⚙️ Config</button>
         <button style={aba === "calculadora" ? tabActive : tabInactive} onClick={() => setAba("calculadora")}>🧮 Calculadora</button>
         <button style={aba === "backup" ? tabActive : tabInactive} onClick={() => setAba("backup")}>💾 Backup</button>
@@ -2029,7 +2456,8 @@ export default function App() {
       <div style={content}>
         {aba === "cadastros" && <CadastroVendedoresTab cadastros={cadastros} setCadastros={setCadastros} />}
         {aba === "entrada" && <EntradaTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} cadastros={cadastros} />}
-        {aba === "contas" && <PrestaContasTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} />}
+        {aba === "contas" && <PrestaContasTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} currentUser={currentUser} />}
+        {aba === "conferentes" && currentUser?.admin && <ConferentesTab currentUser={currentUser} />}
         {aba === "resumo" && <ResumoTab vendedores={vendedores} formas={formas} fecharDia={fecharDia} />}
         {aba === "impressao" && <ImpressaoTab vendedores={vendedores} formas={formas} />}
         {aba === "historico" && <HistoricoTab historico={historico} setHistorico={setHistorico} formas={formas}
@@ -2075,6 +2503,7 @@ export default function App() {
                       <th style={{ ...th, textAlign: "right" }}>Total Entrada</th>
                       <th style={{ ...th, textAlign: "center" }}>Prestação</th>
                       <th style={{ ...th, textAlign: "right" }}>Diferença</th>
+                      <th style={th}>🕵️ Conferido por</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2090,6 +2519,10 @@ export default function App() {
                           </td>
                           <td style={{ ...td, textAlign: "right", color: cor, fontWeight: 700 }}>
                             {!p ? "—" : p.status === "ok" ? "R$ 0,00" : (p.diferenca >= 0 ? "+" : "") + fmt(p.diferenca)}
+                          </td>
+                          <td style={{ ...td, color: "#94A3B8", fontSize: 11 }}>
+                            {p?.conferente?.nome || "—"}
+                            {p?.conferidoEm && <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>{new Date(p.conferidoEm).toLocaleDateString("pt-BR")}</div>}
                           </td>
                         </tr>
                       );
