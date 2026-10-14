@@ -2075,6 +2075,242 @@ function SetupScreen({ onConfigurado }) {
    ABA CONFERENTES — Gerenciar usuários com login
    (visível só para administradores)
 ══════════════════════════════════════ */
+/* ══════════════════════════════════════
+   ABA MENSAGENS — Envio pelo WhatsApp com modelos prontos
+══════════════════════════════════════ */
+function MensagensTab({ cadastros, vendedores, currentUser }) {
+  const [vendedorId, setVendedorId] = useState("");
+  const [templateId, setTemplateId] = useState("");
+  const [mensagem, setMensagem] = useState("");
+  const [editou, setEditou] = useState(false);
+
+  // Combina vendedores cadastrados com os de hoje (prioriza telefone atualizado)
+  const todosVendedores = [
+    ...cadastros.map((c) => ({ ...c, tipo: "cadastro" })),
+  ];
+  // Adiciona vendedores de hoje que não estão nos cadastros
+  vendedores.forEach((v) => {
+    if (!todosVendedores.some((c) => c.nome.trim().toLowerCase() === v.nome.trim().toLowerCase())) {
+      todosVendedores.push({ id: v.id, nome: v.nome, telefone: v.telefone, tipo: "entrada" });
+    }
+  });
+
+  const vendedorSel = todosVendedores.find((v) => String(v.id) === String(vendedorId));
+
+  // Busca prestação de hoje do vendedor (se existir)
+  const entradaHoje = vendedorSel ? vendedores.find((v) => v.nome.trim().toLowerCase() === vendedorSel.nome.trim().toLowerCase()) : null;
+  const prestacaoHoje = entradaHoje?.prestacao;
+
+  const TEMPLATES = [
+    {
+      id: "falta_pix",
+      icone: "⚡",
+      nome: "Falta comprovante de PIX",
+      texto: "Olá {nome}, tudo bem? 🙂\n\nEstá faltando o comprovante do *PIX* da sua prestação de hoje. Pode me enviar por favor?\n\nObrigada!",
+    },
+    {
+      id: "falta_dinheiro",
+      icone: "💵",
+      nome: "Falta dinheiro em espécie",
+      texto: "Olá {nome}, tudo bem? 🙂\n\nEstá faltando *dinheiro em espécie* na sua prestação de hoje. Pode conferir e me retornar?\n\nObrigada!",
+    },
+    {
+      id: "gas_divergente",
+      icone: "⛽",
+      nome: "Vasilhame/gás não bate",
+      texto: "Olá {nome}, tudo bem? 🙂\n\nOs valores do *vasilhame/gás* não estão batendo com a conferência. Pode verificar e me retornar?\n\nObrigada!",
+    },
+    {
+      id: "falta_deposito",
+      icone: "🏦",
+      nome: "Aguardando depósito",
+      texto: "Olá {nome}, tudo bem? 🙂\n\nAinda estamos aguardando o *comprovante do depósito* da sua prestação. Pode me enviar quando possível?\n\nObrigada!",
+    },
+    {
+      id: "divergencia_geral",
+      icone: "⚠️",
+      nome: "Divergência na prestação",
+      texto: "Olá {nome}, tudo bem? 🙂\n\nIdentifiquei uma *divergência* na sua prestação. Pode entrar em contato comigo quando puder para conferirmos juntos?\n\nObrigada!",
+    },
+    {
+      id: "pendencia_anterior",
+      icone: "⏮️",
+      nome: "Pendência de dias anteriores",
+      texto: "Olá {nome}, tudo bem? 🙂\n\nAinda está em aberto uma *pendência de prestação de dias anteriores*. Pode me procurar para acertarmos?\n\nObrigada!",
+    },
+    {
+      id: "contato",
+      icone: "📞",
+      nome: "Entre em contato",
+      texto: "Olá {nome}, tudo bem? 🙂\n\nPreciso falar com você sobre a sua *prestação*. Quando puder, me liga ou me chama aqui no WhatsApp.\n\nObrigada!",
+    },
+    {
+      id: "custom",
+      icone: "✏️",
+      nome: "Mensagem personalizada (escrever do zero)",
+      texto: "",
+    },
+  ];
+
+  const aplicarTemplate = (id) => {
+    setTemplateId(id);
+    setEditou(false);
+    const t = TEMPLATES.find((x) => x.id === id);
+    if (!t) return;
+    if (t.id === "custom") {
+      setMensagem("");
+    } else {
+      const nomeFirst = vendedorSel ? vendedorSel.nome.split(" ")[0] : "{nome}";
+      setMensagem(t.texto.replace(/\{nome\}/g, nomeFirst));
+    }
+  };
+
+  // Atualiza mensagem se trocar vendedor E tiver template aplicado
+  useEffect(() => {
+    if (templateId && templateId !== "custom" && !editou) {
+      aplicarTemplate(templateId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vendedorId]);
+
+  const abrirWhatsApp = () => {
+    if (!vendedorSel) return alert("Selecione um vendedor.");
+    if (!vendedorSel.telefone) return alert("Esse vendedor não tem WhatsApp cadastrado. Edite o cadastro primeiro.");
+    if (!mensagem.trim()) return alert("A mensagem está vazia.");
+    const tel = "55" + vendedorSel.telefone.replace(/\D/g, "");
+    const assinatura = currentUser ? `\n\n_${currentUser.nome}_` : "";
+    const msg = mensagem + assinatura;
+    window.open(`https://wa.me/${tel}?text=${encodeURIComponent(msg)}`, "_blank");
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={card}>
+        <h2 style={cardTitle}>💬 Enviar Mensagem WhatsApp</h2>
+        <div style={{ fontSize: 12, color: "#64748B", marginBottom: 20 }}>
+          Envie avisos rápidos para os vendedores sobre pendências ou divergências na prestação.
+        </div>
+
+        {/* Selecionar vendedor */}
+        <div style={{ marginBottom: 20 }}>
+          <label style={labelStyle}>👤 Para quem é a mensagem?</label>
+          {todosVendedores.length === 0 ? (
+            <div style={{ color: "#FCA5A5", fontSize: 13, padding: "12px 14px", background: "#1E293B", borderRadius: 8, border: "1px solid #7F1D1D" }}>
+              ⚠️ Nenhum vendedor cadastrado. Cadastre pelo menos um na aba <strong>"Vendedores"</strong>.
+            </div>
+          ) : (
+            <select style={inputStyle} value={vendedorId} onChange={(e) => setVendedorId(e.target.value)}>
+              <option value="">-- Selecione o vendedor --</option>
+              {todosVendedores
+                .sort((a, b) => a.nome.localeCompare(b.nome))
+                .map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.nome}{v.telefone ? ` · 📱 ${v.telefone}` : " · ⚠️ SEM WHATSAPP"}
+                  </option>
+                ))}
+            </select>
+          )}
+        </div>
+
+        {/* Dados do vendedor selecionado */}
+        {vendedorSel && (
+          <div style={{ background: "#0D1527", border: `1px solid ${vendedorSel.telefone ? "#10B98155" : "#EF444455"}`, borderRadius: 10, padding: "12px 16px", marginBottom: 20 }}>
+            <div style={{ fontSize: 13, color: "#F1F5F9", fontWeight: 700 }}>👤 {vendedorSel.nome}</div>
+            <div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>
+              {vendedorSel.telefone ? `📱 ${vendedorSel.telefone}` : "⚠️ Sem WhatsApp cadastrado — não é possível enviar"}
+            </div>
+            {prestacaoHoje && (
+              <div style={{ marginTop: 8, padding: "6px 10px", background: "#1E293B", borderRadius: 6, fontSize: 11 }}>
+                <span style={{ color: "#94A3B8" }}>📅 Prestação de hoje: </span>
+                <strong style={{ color: prestacaoHoje.status === "ok" ? "#10B981" : prestacaoHoje.status === "sobrou" ? "#3B82F6" : "#EF4444" }}>
+                  {prestacaoHoje.status === "ok" ? "✅ OK" : prestacaoHoje.status === "sobrou" ? `📈 Sobrou ${fmt(Math.abs(prestacaoHoje.diferenca))}` : `⚠️ Faltou ${fmt(Math.abs(prestacaoHoje.diferenca))}`}
+                </strong>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Templates */}
+        {vendedorSel && vendedorSel.telefone && (
+          <>
+            <div style={{ marginBottom: 10 }}>
+              <label style={labelStyle}>📝 Escolha o modelo de mensagem</label>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8, marginBottom: 20 }}>
+              {TEMPLATES.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => aplicarTemplate(t.id)}
+                  style={{
+                    background: templateId === t.id ? "#10B98122" : "#1E293B",
+                    border: templateId === t.id ? "2px solid #10B981" : "1px solid #334155",
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                    color: "#F1F5F9",
+                    fontSize: 12,
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                  }}
+                >
+                  <div style={{ fontSize: 16, marginBottom: 3 }}>{t.icone}</div>
+                  <div>{t.nome}</div>
+                </button>
+              ))}
+            </div>
+
+            {/* Caixa de mensagem */}
+            {templateId && (
+              <>
+                <label style={labelStyle}>✉️ Mensagem (você pode editar)</label>
+                <textarea
+                  style={{
+                    ...inputStyle,
+                    minHeight: 180,
+                    resize: "vertical",
+                    fontFamily: "'Segoe UI', sans-serif",
+                    lineHeight: 1.5,
+                  }}
+                  value={mensagem}
+                  onChange={(e) => { setMensagem(e.target.value); setEditou(true); }}
+                  placeholder="Digite sua mensagem aqui..."
+                />
+                <div style={{ fontSize: 11, color: "#64748B", marginTop: 6, marginBottom: 16 }}>
+                  💡 Dica: Use *texto* para negrito no WhatsApp. Sua assinatura ({currentUser?.nome || "você"}) será adicionada automaticamente no final.
+                </div>
+
+                {/* Preview final */}
+                <div style={{ background: "#064E3B22", border: "1px solid #10B98155", borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}>
+                  <div style={{ fontSize: 10, color: "#10B981", textTransform: "uppercase", fontWeight: 700, marginBottom: 6 }}>
+                    👁️ Pré-visualização da mensagem
+                  </div>
+                  <div style={{ whiteSpace: "pre-wrap", fontSize: 13, color: "#F1F5F9", lineHeight: 1.6 }}>
+                    {mensagem}
+                    {currentUser && <div style={{ marginTop: 10, fontStyle: "italic", color: "#94A3B8" }}>_{currentUser.nome}_</div>}
+                  </div>
+                </div>
+
+                <button
+                  style={{ ...btn, background: "#25D366", width: "100%", fontSize: 15, padding: "14px", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}
+                  onClick={abrirWhatsApp}
+                >
+                  📲 Abrir WhatsApp e enviar
+                </button>
+              </>
+            )}
+          </>
+        )}
+
+        {vendedorSel && !vendedorSel.telefone && (
+          <div style={{ background: "#450a0a", border: "1px solid #EF444455", borderRadius: 10, padding: "14px 18px", color: "#FCA5A5", fontSize: 13 }}>
+            ⚠️ Este vendedor não tem WhatsApp cadastrado. Vá na aba <strong>"👥 Vendedores"</strong>, edite o cadastro e adicione o número de WhatsApp.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ConferentesTab({ currentUser }) {
   const [conferentes, setConferentes] = useState([]);
   const [carregando, setCarregando] = useState(true);
@@ -2438,6 +2674,7 @@ export default function App() {
           📊 Resumo
           {vendedores.length > 0 && <span style={{ marginLeft: 5, background: "#10B981", color: "#000", fontSize: 10, fontWeight: 800, borderRadius: 10, padding: "1px 6px" }}>{vendedores.length}</span>}
         </button>
+        <button style={aba === "mensagens" ? tabActive : tabInactive} onClick={() => setAba("mensagens")}>💬 Mensagens</button>
         <button style={aba === "impressao" ? tabActive : tabInactive} onClick={() => setAba("impressao")}>🖨️ Imprimir</button>
         <button style={aba === "historico" ? tabActive : tabInactive} onClick={() => setAba("historico")}>
           📅 Histórico
@@ -2448,9 +2685,13 @@ export default function App() {
             🕵️ Conferentes
           </button>
         )}
-        <button style={aba === "config" ? tabActive : tabInactive} onClick={() => setAba("config")}>⚙️ Config</button>
         <button style={aba === "calculadora" ? tabActive : tabInactive} onClick={() => setAba("calculadora")}>🧮 Calculadora</button>
-        <button style={aba === "backup" ? tabActive : tabInactive} onClick={() => setAba("backup")}>💾 Backup</button>
+        {currentUser?.admin && (
+          <button style={aba === "config" ? tabActive : tabInactive} onClick={() => setAba("config")}>⚙️ Config</button>
+        )}
+        {currentUser?.admin && (
+          <button style={aba === "backup" ? tabActive : tabInactive} onClick={() => setAba("backup")}>💾 Backup</button>
+        )}
       </div>
 
       <div style={content}>
@@ -2546,9 +2787,10 @@ export default function App() {
             onCancelar={() => setAba("ver_fechamento")}
           />
         )}
-        {aba === "config" && <ConfigTab formas={formas} setFormas={setFormas} />}
+        {aba === "mensagens" && <MensagensTab cadastros={cadastros} vendedores={vendedores} currentUser={currentUser} />}
+        {aba === "config" && currentUser?.admin && <ConfigTab formas={formas} setFormas={setFormas} />}
         {aba === "calculadora" && <CalculadoraTab />}
-        {aba === "backup" && (
+        {aba === "backup" && currentUser?.admin && (
           <BackupTab
             dados={{ vendedores, historico, cadastros, formas }}
             onImportar={(dados) => {
