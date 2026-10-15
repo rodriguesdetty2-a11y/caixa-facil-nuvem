@@ -1797,6 +1797,8 @@ function CadastroVendedoresTab({ cadastros, setCadastros }) {
 function HistoricoTab({ historico, setHistorico, formas, abrirFechamento, editarFechamento }) {
   const [filtro, setFiltro] = useState("todos");
   const [mesSel, setMesSel] = useState("");
+  const [dataIni, setDataIni] = useState("");
+  const [dataFim, setDataFim] = useState("");
 
   const agora = new Date();
   const inicioSemana = new Date(agora);
@@ -1810,6 +1812,11 @@ function HistoricoTab({ historico, setHistorico, formas, abrirFechamento, editar
       const [ano, mes] = mesSel.split("-");
       return data.getFullYear() === Number(ano) && data.getMonth() + 1 === Number(mes);
     }
+    if (filtro === "periodo" && dataIni && dataFim) {
+      const ini = new Date(dataIni + "T00:00:00");
+      const fim = new Date(dataFim + "T23:59:59");
+      return data >= ini && data <= fim;
+    }
     return true;
   });
 
@@ -1821,6 +1828,160 @@ function HistoricoTab({ historico, setHistorico, formas, abrirFechamento, editar
   const removerFechamento = (id) => {
     if (confirm("Remover este fechamento do histórico?"))
       setHistorico((prev) => prev.filter((f) => f.id !== id));
+  };
+
+  // 🖨️ Imprimir relatório PDF — individual ou do período filtrado
+  const imprimirRelatorio = (fechamentosParaImprimir, tituloRelatorio) => {
+    if (!fechamentosParaImprimir || fechamentosParaImprimir.length === 0) {
+      return alert("Nenhum fechamento para imprimir neste filtro.");
+    }
+
+    const totalEsp = fechamentosParaImprimir.reduce((s, f) => s + f.totalEsperado, 0);
+    const totalEnt = fechamentosParaImprimir.reduce((s, f) => s + (f.totalEntregue || 0), 0);
+    const totalDifImp = totalEnt - totalEsp;
+
+    const totalPorFormaImp = {};
+    formas.forEach((pt) => {
+      totalPorFormaImp[pt.key] = fechamentosParaImprimir.reduce((s, f) => s + (f.totalPorForma?.[pt.key] || 0), 0);
+    });
+
+    const dataGer = new Date().toLocaleString("pt-BR");
+
+    let html = `
+      <!DOCTYPE html>
+      <html lang="pt-BR">
+      <head>
+        <meta charset="UTF-8" />
+        <title>${tituloRelatorio}</title>
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: Arial, sans-serif; font-size: 12px; color: #111; background: #fff; padding: 20px; }
+          .cabecalho { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 16px; }
+          .titulo { font-size: 20px; font-weight: 900; }
+          .sub { font-size: 11px; color: #555; margin-top: 3px; }
+          .totais-geral { display: flex; justify-content: space-around; background: #f0fdf4; border: 2px solid #10B981; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
+          .totais-geral .box { text-align: center; }
+          .totais-geral .valor { font-size: 18px; font-weight: 900; }
+          .totais-geral .label { font-size: 10px; color: #555; margin-top: 2px; text-transform: uppercase; }
+          .formas-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
+          .forma-box { border: 1px solid #ddd; border-radius: 4px; padding: 8px; text-align: center; }
+          .forma-box .nome { font-size: 10px; color: #666; }
+          .forma-box .valor { font-size: 13px; font-weight: 800; margin-top: 2px; }
+          .fechamento { border: 1px solid #ddd; border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; page-break-inside: avoid; }
+          .fechamento .data { font-size: 13px; font-weight: 800; color: #111; }
+          .fechamento .sub-fech { font-size: 10px; color: #666; margin-top: 2px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
+          th { background: #f0f0f0; padding: 5px 8px; text-align: left; font-weight: 700; border: 1px solid #ddd; }
+          td { padding: 5px 8px; border: 1px solid #ddd; }
+          .right { text-align: right; }
+          .center { text-align: center; }
+          .ok { color: #059669; font-weight: 700; }
+          .sobrou { color: #2563EB; font-weight: 700; }
+          .faltou { color: #DC2626; font-weight: 700; }
+          .total-row { background: #f9f9f9; font-weight: 800; }
+          .assinatura { margin-top: 30px; display: flex; justify-content: space-around; }
+          .assinatura div { text-align: center; border-top: 1px solid #333; padding-top: 5px; width: 180px; font-size: 10px; }
+          @media print { body { padding: 10px; } }
+        </style>
+      </head>
+      <body>
+        <div class="cabecalho">
+          <div class="titulo">🏪 CaixaFácil — ${tituloRelatorio}</div>
+          <div class="sub">Gerado em ${dataGer} · ${fechamentosParaImprimir.length} fechamento(s)</div>
+        </div>
+
+        <div class="totais-geral">
+          <div class="box">
+            <div class="label">📥 Total Esperado</div>
+            <div class="valor" style="color:#3B82F6">${fmt(totalEsp)}</div>
+          </div>
+          <div class="box">
+            <div class="label">📤 Total Entregue</div>
+            <div class="valor" style="color:#059669">${fmt(totalEnt)}</div>
+          </div>
+          <div class="box">
+            <div class="label">⚖️ Diferença</div>
+            <div class="valor ${Math.abs(totalDifImp) < 0.01 ? "ok" : totalDifImp > 0 ? "sobrou" : "faltou"}">
+              ${Math.abs(totalDifImp) < 0.01 ? "✅ OK" : (totalDifImp >= 0 ? "+" : "") + fmt(totalDifImp)}
+            </div>
+          </div>
+        </div>
+
+        <div class="formas-row">
+          ${formas.map((pt) => `
+            <div class="forma-box">
+              <div class="nome">${pt.icon} ${pt.label}</div>
+              <div class="valor" style="color:${pt.color}">${fmt(totalPorFormaImp[pt.key] || 0)}</div>
+            </div>
+          `).join("")}
+        </div>
+
+        ${fechamentosParaImprimir.map((f) => `
+          <div class="fechamento">
+            <div class="data">📅 ${f.dataFormatada}</div>
+            <div class="sub-fech">${f.vendedores.length} vendedor(es) · fechado às ${f.horaFormatada}</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Vendedor</th>
+                  <th class="right">Esperado</th>
+                  <th class="right">Entregue</th>
+                  <th class="center">Status</th>
+                  <th class="right">Diferença</th>
+                  <th>Conferido por</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${f.vendedores.map((v) => {
+                  const p = v.prestacao;
+                  const cls = !p ? "" : p.status === "ok" ? "ok" : p.status === "sobrou" ? "sobrou" : "faltou";
+                  return `
+                    <tr>
+                      <td><strong>${v.nome}</strong></td>
+                      <td class="right">${fmt(v.total)}</td>
+                      <td class="right">${p ? fmt(p.totalEntregue) : "—"}</td>
+                      <td class="center ${cls}">
+                        ${!p ? "⏳ Pendente" : p.status === "ok" ? "✅ OK" : p.status === "sobrou" ? "📈 Sobrou" : "⚠️ Faltou"}
+                      </td>
+                      <td class="right ${cls}">
+                        ${!p ? "—" : p.status === "ok" ? "R$ 0,00" : (p.diferenca >= 0 ? "+" : "") + fmt(p.diferenca)}
+                      </td>
+                      <td style="font-size:9px">${p?.conferente?.nome || "—"}</td>
+                    </tr>
+                  `;
+                }).join("")}
+                <tr class="total-row">
+                  <td><strong>TOTAL</strong></td>
+                  <td class="right"><strong>${fmt(f.totalEsperado)}</strong></td>
+                  <td class="right"><strong>${fmt(f.totalEntregue || 0)}</strong></td>
+                  <td class="center">${f.vendedores.filter((v) => v.prestacao).length}/${f.vendedores.length}</td>
+                  <td class="right">
+                    ${(() => {
+                      const dif = (f.totalEntregue || 0) - f.totalEsperado;
+                      if (Math.abs(dif) < 0.01) return '<span class="ok">✅ OK</span>';
+                      return `<span class="${dif > 0 ? "sobrou" : "faltou"}">${dif >= 0 ? "+" : ""}${fmt(dif)}</span>`;
+                    })()}
+                  </td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        `).join("")}
+
+        <div class="assinatura">
+          <div>Responsável pelo Caixa</div>
+          <div>Gerente / Supervisor</div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const janela = window.open("", "_blank", "width=900,height=700");
+    janela.document.write(html);
+    janela.document.close();
+    janela.focus();
+    setTimeout(() => janela.print(), 500);
   };
 
   if (historico.length === 0) {
@@ -1845,8 +2006,8 @@ function HistoricoTab({ historico, setHistorico, formas, abrirFechamento, editar
         <h2 style={cardTitle}>📅 Histórico de Fechamentos</h2>
 
         {/* Filtros */}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20, alignItems: "center" }}>
-          {[["todos","🗂️ Todos"],["hoje","📆 Hoje"],["semana","📅 Esta Semana"],["mes","🗓️ Por Mês"]].map(([k,l]) => (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12, alignItems: "center" }}>
+          {[["todos","🗂️ Todos"],["hoje","📆 Hoje"],["semana","📅 Esta Semana"],["mes","🗓️ Por Mês"],["periodo","📆 Por Período"]].map(([k,l]) => (
             <button key={k} style={{ ...btn, background: filtro === k ? "#10B981" : "#1E293B", fontSize: 12, padding: "7px 14px" }}
               onClick={() => setFiltro(k)}>{l}</button>
           ))}
@@ -1858,6 +2019,47 @@ function HistoricoTab({ historico, setHistorico, formas, abrirFechamento, editar
             {filtrados.length} fechamento(s)
           </span>
         </div>
+
+        {/* Filtro por período (datas inicial e final) */}
+        {filtro === "periodo" && (
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20, alignItems: "center", background: "#0D1527", border: "1px solid #334155", borderRadius: 10, padding: "10px 14px" }}>
+            <span style={{ fontSize: 11, color: "#94A3B8", fontWeight: 700 }}>📅 De:</span>
+            <input type="date" style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12 }} value={dataIni} onChange={(e) => setDataIni(e.target.value)} />
+            <span style={{ fontSize: 11, color: "#94A3B8", fontWeight: 700 }}>até:</span>
+            <input type="date" style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12 }} value={dataFim} onChange={(e) => setDataFim(e.target.value)} />
+            {dataIni && dataFim && (
+              <span style={{ fontSize: 11, color: "#10B981", fontWeight: 700 }}>
+                ✅ {new Date(dataIni + "T12:00:00").toLocaleDateString("pt-BR")} até {new Date(dataFim + "T12:00:00").toLocaleDateString("pt-BR")}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Botão de imprimir o período filtrado em PDF */}
+        {filtrados.length > 0 && (
+          <div style={{ marginBottom: 16, display: "flex", justifyContent: "flex-end" }}>
+            <button
+              style={{ ...btn, background: "#DC2626", fontSize: 13, padding: "10px 18px", display: "flex", alignItems: "center", gap: 8 }}
+              onClick={() => {
+                let titulo = "Relatório de Fechamentos";
+                if (filtro === "hoje") titulo = `Relatório — Hoje (${new Date().toLocaleDateString("pt-BR")})`;
+                else if (filtro === "semana") titulo = "Relatório — Esta Semana";
+                else if (filtro === "mes" && mesSel) {
+                  const [ano, mes] = mesSel.split("-");
+                  const meses = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+                  titulo = `Relatório — ${meses[Number(mes)-1]}/${ano}`;
+                }
+                else if (filtro === "periodo" && dataIni && dataFim) {
+                  titulo = `Relatório — ${new Date(dataIni + "T12:00:00").toLocaleDateString("pt-BR")} a ${new Date(dataFim + "T12:00:00").toLocaleDateString("pt-BR")}`;
+                }
+                else titulo = "Relatório — Todos os Fechamentos";
+                imprimirRelatorio(filtrados, titulo);
+              }}
+            >
+              🖨️ Imprimir PDF do período ({filtrados.length} fechamento{filtrados.length > 1 ? "s" : ""})
+            </button>
+          </div>
+        )}
 
         {/* Totais do período */}
         {filtrados.length > 0 && (
@@ -1906,6 +2108,13 @@ function HistoricoTab({ historico, setHistorico, formas, abrirFechamento, editar
                     </span>
                     <button style={{ ...miniBtn, background: "#2563EB" }} onClick={() => abrirFechamento(f)}>👁️ Ver</button>
                     <button style={{ ...miniBtn, background: "#F97316" }} onClick={() => editarFechamento(f)}>✏️ Editar</button>
+                    <button
+                      style={{ ...miniBtn, background: "#DC2626" }}
+                      title="Imprimir PDF deste fechamento"
+                      onClick={() => imprimirRelatorio([f], `Fechamento — ${f.dataFormatada}`)}
+                    >
+                      🖨️ PDF
+                    </button>
                     <button style={{ ...miniBtn, background: "#7C3AED" }} onClick={() => {
                       const dataAtual = new Date(f.timestamp).toISOString().split("T")[0];
                       const novaData = prompt("📅 Digite a nova data (AAAA-MM-DD):\n\nData atual: " + dataAtual, dataAtual);
@@ -2353,6 +2562,8 @@ function ConferentesTab({ currentUser }) {
   const [sucesso, setSucesso] = useState("");
   const [editandoSenhaId, setEditandoSenhaId] = useState(null);
   const [senhaInput, setSenhaInput] = useState("");
+  const [editandoNomeId, setEditandoNomeId] = useState(null);
+  const [nomeInput, setNomeInput] = useState("");
 
   const carregar = async () => {
     setCarregando(true);
@@ -2394,6 +2605,15 @@ function ConferentesTab({ currentUser }) {
     if (error) return alert("Erro: " + error);
     setEditandoSenhaId(null); setSenhaInput("");
     alert("✅ Senha atualizada!");
+  };
+
+  const salvarNome = async (id) => {
+    if (!nomeInput.trim()) return alert("O nome não pode ficar em branco.");
+    const { error } = await atualizarConferente(id, { nome: nomeInput.trim() });
+    if (error) return alert("Erro: " + error);
+    setEditandoNomeId(null); setNomeInput("");
+    await carregar();
+    alert("✅ Nome atualizado!");
   };
 
   const excluir = async (c) => {
@@ -2468,7 +2688,13 @@ function ConferentesTab({ currentUser }) {
                 </div>
 
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-                  {editandoSenhaId === c.id ? (
+                  {editandoNomeId === c.id ? (
+                    <>
+                      <input style={{ ...inputStyle, width: 240, padding: "5px 10px", fontSize: 12 }} type="text" value={nomeInput} onChange={(e) => setNomeInput(e.target.value)} placeholder="Novo nome completo" autoFocus />
+                      <button style={{ ...miniBtn, background: "#10B981" }} onClick={() => salvarNome(c.id)}>✓ Salvar nome</button>
+                      <button style={{ ...miniBtn, background: "#374151" }} onClick={() => { setEditandoNomeId(null); setNomeInput(""); }}>Cancelar</button>
+                    </>
+                  ) : editandoSenhaId === c.id ? (
                     <>
                       <input style={{ ...inputStyle, width: 160, padding: "5px 10px", fontSize: 12 }} type="text" value={senhaInput} onChange={(e) => setSenhaInput(e.target.value)} placeholder="Nova senha" autoFocus />
                       <button style={{ ...miniBtn, background: "#10B981" }} onClick={() => salvarSenha(c.id)}>✓ Salvar</button>
@@ -2476,6 +2702,7 @@ function ConferentesTab({ currentUser }) {
                     </>
                   ) : (
                     <>
+                      <button style={{ ...miniBtn, background: "#7C3AED" }} onClick={() => { setEditandoNomeId(c.id); setNomeInput(c.nome); }}>✏️ Editar nome</button>
                       <button style={{ ...miniBtn, background: "#2563EB" }} onClick={() => { setEditandoSenhaId(c.id); setSenhaInput(""); }}>🔑 Mudar senha</button>
                       {c.id !== currentUser.id && (
                         <>
