@@ -712,7 +712,7 @@ function EntradaTab({ vendedores, setVendedores, formas, cadastros }) {
 /* ══════════════════════════════════════
    ABA 2 — PRESTAÇÃO DE CONTAS
 ══════════════════════════════════════ */
-function PrestaContasTab({ vendedores, setVendedores, formas, currentUser }) {
+function PrestaContasTab({ vendedores, setVendedores, formas, cadastros, currentUser }) {
   const [selectedId, setSelectedId] = useState("");
   const [entregue, setEntregue] = useState(initValores(formas));
   const [confirmado, setConfirmado] = useState(false);
@@ -798,6 +798,37 @@ function PrestaContasTab({ vendedores, setVendedores, formas, currentUser }) {
             </select>
           )}
         </div>
+
+        {/* ⚠️ Aviso de saldo (devedor ou positivo) do vendedor selecionado */}
+        {vendedor && (() => {
+          const cadastro = (cadastros || []).find((c) => c.nome.trim().toLowerCase() === vendedor.nome.trim().toLowerCase());
+          if (!cadastro) return null;
+          const saldo = cadastro.saldo || 0;
+          const temSaldo = Math.abs(saldo) >= 0.01;
+          if (!temSaldo) return null;
+          const devedor = saldo < 0;
+          const cor = devedor ? "#EF4444" : "#3B82F6";
+          const bg = devedor ? "#450a0a" : "#1e3a5f";
+          return (
+            <div style={{ background: bg, border: `2px solid ${cor}`, borderRadius: 12, padding: "14px 18px", marginBottom: 16, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 32 }}>{devedor ? "⚠️" : "📈"}</div>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div style={{ fontSize: 11, color: cor, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>
+                  {devedor ? "⚠️ ATENÇÃO — Saldo Devedor" : "📈 Saldo Positivo (crédito a receber)"}
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "#F1F5F9" }}>
+                  {vendedor.nome} {devedor ? "está devendo" : "tem crédito de"} <span style={{ color: cor }}>{fmt(Math.abs(saldo))}</span>
+                </div>
+                <div style={{ fontSize: 11, color: "#CBD5E1", marginTop: 4 }}>
+                  {devedor
+                    ? "💡 Confira se o vendedor vai pagar essa diferença hoje junto com a prestação."
+                    : "💡 Esse valor pode ser compensado se faltar algo na prestação de hoje."
+                  }
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Banner de prestação já confirmada */}
         {vendedor && confirmado && (
@@ -2561,18 +2592,27 @@ export default function App() {
     setHistorico((prev) => [fechamento, ...prev]);
 
     // Atualiza saldo: FALTOU desconta, SOBROU vira crédito (acumula).
+    // IMPORTANTE: faz UMA ÚNICA atualização com TODAS as mudanças de uma vez,
+    // senão as chamadas sequenciais ao Supabase podem sobrescrever umas às outras.
+    const diferencasPorNome = {};
     vendedores.forEach((v) => {
       if (v.prestacao && (v.prestacao.status === "faltou" || v.prestacao.status === "sobrou")) {
-        const diferenca = v.prestacao.diferenca || 0; // negativo quando faltou, positivo quando sobrou
-        setCadastros((prev) => prev.map((c) => {
-          if (c.nome.trim().toLowerCase() === v.nome.trim().toLowerCase()) {
-            return { ...c, saldo: Math.round(((c.saldo || 0) + diferenca) * 100) / 100 };
-          }
-          return c;
-        }));
+        const nomeKey = v.nome.trim().toLowerCase();
+        const diferenca = v.prestacao.diferenca || 0;
+        diferencasPorNome[nomeKey] = (diferencasPorNome[nomeKey] || 0) + diferenca;
       }
       // Se OK: saldo não muda (diferença = 0)
     });
+    if (Object.keys(diferencasPorNome).length > 0) {
+      setCadastros((prev) => prev.map((c) => {
+        const nomeKey = c.nome.trim().toLowerCase();
+        const dif = diferencasPorNome[nomeKey];
+        if (dif !== undefined) {
+          return { ...c, saldo: Math.round(((c.saldo || 0) + dif) * 100) / 100 };
+        }
+        return c;
+      }));
+    }
 
     setVendedores([]);
     alert("✅ Dia fechado! Saldos atualizados (faltou desconta, sobrou vira crédito).");
@@ -2697,7 +2737,7 @@ export default function App() {
       <div style={content}>
         {aba === "cadastros" && <CadastroVendedoresTab cadastros={cadastros} setCadastros={setCadastros} />}
         {aba === "entrada" && <EntradaTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} cadastros={cadastros} />}
-        {aba === "contas" && <PrestaContasTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} currentUser={currentUser} />}
+        {aba === "contas" && <PrestaContasTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} cadastros={cadastros} currentUser={currentUser} />}
         {aba === "conferentes" && currentUser?.admin && <ConferentesTab currentUser={currentUser} />}
         {aba === "resumo" && <ResumoTab vendedores={vendedores} formas={formas} fecharDia={fecharDia} />}
         {aba === "impressao" && <ImpressaoTab vendedores={vendedores} formas={formas} />}
