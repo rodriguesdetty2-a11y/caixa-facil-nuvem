@@ -72,6 +72,15 @@ function useCloudState(key, defaultValue) {
   return [value, setValue, loaded];
 }
 
+// Dado o campo "conferente" de uma prestação e a lista atual de conferentes,
+// devolve o NOME ATUALIZADO. Se o conferente foi removido ou não existe, usa o nome gravado.
+function nomeConferenteAtual(conferenteGravado, listaConferentes) {
+  if (!conferenteGravado) return null;
+  if (!listaConferentes || listaConferentes.length === 0) return conferenteGravado.nome;
+  const atual = listaConferentes.find((c) => c.id === conferenteGravado.id);
+  return atual ? atual.nome : conferenteGravado.nome;
+}
+
 const PAYMENT_TYPES_PADRAO = [
   { key: "deposito",   label: "Depósito",       icon: "🏦", color: "#3B82F6" },
   { key: "moeda",      label: "Moeda",           icon: "🪙", color: "#F59E0B" },
@@ -712,7 +721,7 @@ function EntradaTab({ vendedores, setVendedores, formas, cadastros }) {
 /* ══════════════════════════════════════
    ABA 2 — PRESTAÇÃO DE CONTAS
 ══════════════════════════════════════ */
-function PrestaContasTab({ vendedores, setVendedores, formas, cadastros, currentUser }) {
+function PrestaContasTab({ vendedores, setVendedores, formas, cadastros, currentUser, conferentesLista }) {
   const [selectedId, setSelectedId] = useState("");
   const [entregue, setEntregue] = useState(initValores(formas));
   const [confirmado, setConfirmado] = useState(false);
@@ -837,7 +846,7 @@ function PrestaContasTab({ vendedores, setVendedores, formas, cadastros, current
               <div>✅ Prestação confirmada. Para corrigir um valor, clique em Editar.</div>
               {vendedor.prestacao?.conferente && (
                 <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 3 }}>
-                  🕵️ Conferido por <strong style={{ color: "#F1F5F9" }}>{vendedor.prestacao.conferente.nome}</strong>
+                  🕵️ Conferido por <strong style={{ color: "#F1F5F9" }}>{nomeConferenteAtual(vendedor.prestacao.conferente, conferentesLista)}</strong>
                   {vendedor.prestacao.conferidoEm && <> em {new Date(vendedor.prestacao.conferidoEm).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</>}
                 </div>
               )}
@@ -991,7 +1000,7 @@ function PrestaContasTab({ vendedores, setVendedores, formas, cadastros, current
 /* ══════════════════════════════════════
    ABA 3 — RESUMO GERAL
 ══════════════════════════════════════ */
-function ResumoTab({ vendedores, formas }) {
+function ResumoTab({ vendedores, formas, conferentesLista }) {
   if (vendedores.length === 0) {
     return (
       <div style={card}>
@@ -1107,7 +1116,7 @@ function ResumoTab({ vendedores, formas }) {
                 {p?.conferente && (
                   <div style={{ marginTop: 10, fontSize: 11, color: "#94A3B8", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", borderTop: "1px solid #334155", paddingTop: 10 }}>
                     <span>🕵️ Conferido por</span>
-                    <strong style={{ color: "#F1F5F9" }}>{p.conferente.nome}</strong>
+                    <strong style={{ color: "#F1F5F9" }}>{nomeConferenteAtual(p.conferente, conferentesLista)}</strong>
                     {p.conferidoEm && <span>em {new Date(p.conferidoEm).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>}
                   </div>
                 )}
@@ -1200,7 +1209,7 @@ function ResumoTab({ vendedores, formas }) {
 /* ══════════════════════════════════════
    ABA 4 — IMPRESSÃO / RELATÓRIO
 ══════════════════════════════════════ */
-function ImpressaoTab({ vendedores, formas }) {
+function ImpressaoTab({ vendedores, formas, conferentesLista }) {
   const totalPorForma = {};
   formas.forEach((pt) => {
     totalPorForma[pt.key] = vendedores.reduce((s, v) => s + (v.valores[pt.key] || 0), 0);
@@ -1389,7 +1398,7 @@ function ImpressaoTab({ vendedores, formas }) {
                           </span>}
                     </td>
                     <td style={{ fontSize: 10 }}>
-                      {p?.conferente?.nome || "—"}
+                      {nomeConferenteAtual(p?.conferente, conferentesLista) || "—"}
                       {p?.conferidoEm && <div style={{ fontSize: 9, color: "#777" }}>{new Date(p.conferidoEm).toLocaleDateString("pt-BR")}</div>}
                     </td>
                   </tr>
@@ -1508,7 +1517,7 @@ function ImpressaoTab({ vendedores, formas }) {
                         {!p ? "—" : p.status === "ok" ? "R$ 0,00" : (p.diferenca >= 0 ? "+" : "") + fmt(p.diferenca)}
                       </td>
                       <td style={{ ...tdP, fontSize: 10, color: "#555" }}>
-                        {p?.conferente?.nome || "—"}
+                        {nomeConferenteAtual(p?.conferente, conferentesLista) || "—"}
                       </td>
                     </tr>
                   );
@@ -1794,7 +1803,7 @@ function CadastroVendedoresTab({ cadastros, setCadastros }) {
 /* ══════════════════════════════════════
    ABA 6 — HISTÓRICO DE FECHAMENTOS
 ══════════════════════════════════════ */
-function HistoricoTab({ historico, setHistorico, formas, abrirFechamento, editarFechamento }) {
+function HistoricoTab({ historico, setHistorico, formas, abrirFechamento, editarFechamento, conferentesLista }) {
   const [filtro, setFiltro] = useState("todos");
   const [mesSel, setMesSel] = useState("");
   const [dataIni, setDataIni] = useState("");
@@ -1946,7 +1955,7 @@ function HistoricoTab({ historico, setHistorico, formas, abrirFechamento, editar
                       <td class="right ${cls}">
                         ${!p ? "—" : p.status === "ok" ? "R$ 0,00" : (p.diferenca >= 0 ? "+" : "") + fmt(p.diferenca)}
                       </td>
-                      <td style="font-size:9px">${p?.conferente?.nome || "—"}</td>
+                      <td style="font-size:9px">${nomeConferenteAtual(p?.conferente, conferentesLista) || "—"}</td>
                     </tr>
                   `;
                 }).join("")}
@@ -2551,7 +2560,7 @@ function MensagensTab({ cadastros, vendedores, currentUser }) {
   );
 }
 
-function ConferentesTab({ currentUser }) {
+function ConferentesTab({ currentUser, onMudanca }) {
   const [conferentes, setConferentes] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [novoNome, setNovoNome] = useState("");
@@ -2584,6 +2593,7 @@ function ConferentesTab({ currentUser }) {
     setSucesso(`✅ Usuário ${novoNome} criado!`);
     setNovoNome(""); setNovoUsuario(""); setNovaSenha(""); setNovoAdmin(false);
     await carregar();
+    onMudanca && onMudanca();
     setTimeout(() => setSucesso(""), 3000);
   };
 
@@ -2591,12 +2601,14 @@ function ConferentesTab({ currentUser }) {
     if (c.id === currentUser.id) return alert("Você não pode desativar seu próprio usuário.");
     await atualizarConferente(c.id, { ativo: !c.ativo });
     await carregar();
+    onMudanca && onMudanca();
   };
 
   const toggleAdmin = async (c) => {
     if (c.id === currentUser.id) return alert("Você não pode remover seus próprios privilégios de admin.");
     await atualizarConferente(c.id, { admin: !c.admin });
     await carregar();
+    onMudanca && onMudanca();
   };
 
   const salvarSenha = async (id) => {
@@ -2613,6 +2625,7 @@ function ConferentesTab({ currentUser }) {
     if (error) return alert("Erro: " + error);
     setEditandoNomeId(null); setNomeInput("");
     await carregar();
+    onMudanca && onMudanca();
     alert("✅ Nome atualizado!");
   };
 
@@ -2622,6 +2635,7 @@ function ConferentesTab({ currentUser }) {
     const { error } = await removerConferente(c.id);
     if (error) return alert("Erro: " + error);
     await carregar();
+    onMudanca && onMudanca();
   };
 
   return (
@@ -2738,6 +2752,14 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(() => carregarUsuarioLogado());
   const [authEstado, setAuthEstado] = useState("verificando"); // "verificando" | "setup" | "login" | "ok"
 
+  // Lista de conferentes (para exibir nome ATUALIZADO em prestações antigas)
+  const [conferentesLista, setConferentesLista] = useState([]);
+  const recarregarConferentes = async () => {
+    if (!isSupabaseReady()) return;
+    const lista = await listarConferentes();
+    setConferentesLista(lista);
+  };
+
   // Verifica se precisa de setup ou login na primeira carga
   useEffect(() => {
     if (!isSupabaseReady()) {
@@ -2756,6 +2778,13 @@ export default function App() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Carrega lista de conferentes depois de logar
+  useEffect(() => {
+    if (authEstado === "ok" && isSupabaseReady()) {
+      recarregarConferentes();
+    }
+  }, [authEstado]);
 
   const sair = () => {
     if (!confirm("Deseja sair?")) return;
@@ -2964,11 +2993,12 @@ export default function App() {
       <div style={content}>
         {aba === "cadastros" && <CadastroVendedoresTab cadastros={cadastros} setCadastros={setCadastros} />}
         {aba === "entrada" && <EntradaTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} cadastros={cadastros} />}
-        {aba === "contas" && <PrestaContasTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} cadastros={cadastros} currentUser={currentUser} />}
-        {aba === "conferentes" && currentUser?.admin && <ConferentesTab currentUser={currentUser} />}
-        {aba === "resumo" && <ResumoTab vendedores={vendedores} formas={formas} fecharDia={fecharDia} />}
-        {aba === "impressao" && <ImpressaoTab vendedores={vendedores} formas={formas} />}
+        {aba === "contas" && <PrestaContasTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} cadastros={cadastros} currentUser={currentUser} conferentesLista={conferentesLista} />}
+        {aba === "conferentes" && currentUser?.admin && <ConferentesTab currentUser={currentUser} onMudanca={recarregarConferentes} />}
+        {aba === "resumo" && <ResumoTab vendedores={vendedores} formas={formas} fecharDia={fecharDia} conferentesLista={conferentesLista} />}
+        {aba === "impressao" && <ImpressaoTab vendedores={vendedores} formas={formas} conferentesLista={conferentesLista} />}
         {aba === "historico" && <HistoricoTab historico={historico} setHistorico={setHistorico} formas={formas}
+          conferentesLista={conferentesLista}
           abrirFechamento={(f) => { setFechamentoVer(f); setAba("ver_fechamento"); }}
           editarFechamento={(f) => { setFechamentoVer(f); setAba("editar_fechamento"); }}
         />}
@@ -3029,7 +3059,7 @@ export default function App() {
                             {!p ? "—" : p.status === "ok" ? "R$ 0,00" : (p.diferenca >= 0 ? "+" : "") + fmt(p.diferenca)}
                           </td>
                           <td style={{ ...td, color: "#94A3B8", fontSize: 11 }}>
-                            {p?.conferente?.nome || "—"}
+                            {nomeConferenteAtual(p?.conferente, conferentesLista) || "—"}
                             {p?.conferidoEm && <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>{new Date(p.conferidoEm).toLocaleDateString("pt-BR")}</div>}
                           </td>
                         </tr>
