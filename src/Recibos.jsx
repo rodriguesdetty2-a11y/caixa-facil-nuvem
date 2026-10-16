@@ -83,63 +83,65 @@ function extenso(valor) {
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-/* Abre a janela de impressão com o recibo em 2 vias (A4) */
+/* Abre a janela de impressão com o recibo (1 via, modelo "Recibo de Pagamento") */
 function imprimirRecibo(r) {
-  const via = (rotulo) => `
-    <div class="via">
-      <div class="topo">
-        <div>
-          <div class="emp">${esc(r.empresa.nome)}</div>
-          <div class="sub">${[r.empresa.cnpj && "CNPJ: " + esc(r.empresa.cnpj), esc(r.empresa.endereco), r.empresa.telefone && "Tel: " + esc(r.empresa.telefone)].filter(Boolean).join(" · ")}</div>
-        </div>
-        <div class="dir">
-          <div class="tit">RECIBO</div>
-          <div class="num">Nº ${String(r.numero).padStart(4, "0")}</div>
-          <div class="valor">${fmt(r.valor)}</div>
-        </div>
-      </div>
-      <p class="texto">
-        Recebi(emos) de <b>${esc(r.pagoPor)}</b> a importância de <b>${fmt(r.valor)}</b>
-        (<i>${esc(extenso(r.valor))}</i>), referente a <b>${esc(r.referente)}</b>.
-      </p>
-      <div class="linha"><span>Forma de pagamento:</span> <b>${esc(r.forma)}</b></div>
-      ${r.detalhes ? `<div class="linha"><span>Detalhes:</span> ${esc(r.detalhes)}</div>` : ""}
-      <div class="local">${esc(r.empresa.cidade ? r.empresa.cidade + ", " : "")}${dataExtenso(r.data)}.</div>
-      <div class="ass">
-        <div class="traco"></div>
-        <div><b>${esc(r.recebidoPor)}</b>${r.documentoRecebedor ? " — CPF/CNPJ: " + esc(r.documentoRecebedor) : ""}</div>
-        <div class="peq">Recebedor</div>
-      </div>
-      <div class="rodape">${rotulo}</div>
-    </div>`;
+  const linha = (icone, rotulo, valor) => valor ? `
+      <tr><td class="rot">${icone} ${rotulo}:</td><td class="val">${esc(valor)}</td></tr>` : "";
+  const infoEmpresa = [r.empresa.cnpj && "CNPJ: " + r.empresa.cnpj, r.empresa.endereco, r.empresa.telefone && "Tel: " + r.empresa.telefone]
+    .filter(Boolean).map(esc).join(" · ");
 
-  const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Recibo ${r.numero}</title>
+  const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Recibo ${String(r.numero).padStart(4, "0")} - ${esc(r.recebidoPor)}</title>
   <style>
-    @page { size: A4; margin: 10mm; }
+    @page { size: A4; margin: 0; }
     * { box-sizing: border-box; }
-    body { font-family: Arial, Helvetica, sans-serif; color: #111; margin: 0; }
-    .via { height: 135mm; border: 1.5px solid #222; border-radius: 6px; padding: 9mm 10mm; display: flex; flex-direction: column; }
-    .corte { text-align: center; font-size: 10px; color: #777; border-top: 1px dashed #999; margin: 4mm 0; padding-top: 1mm; }
-    .topo { display: flex; justify-content: space-between; gap: 10px; border-bottom: 2px solid #0f3d2e; padding-bottom: 4mm; margin-bottom: 5mm; }
-    .emp { font-size: 17px; font-weight: 800; color: #0f3d2e; }
-    .sub { font-size: 11px; color: #444; margin-top: 2px; }
-    .dir { text-align: right; }
-    .tit { font-size: 20px; font-weight: 900; letter-spacing: 2px; }
-    .num { font-size: 11px; color: #555; }
-    .valor { margin-top: 3px; font-size: 18px; font-weight: 900; border: 2px solid #0f3d2e; border-radius: 6px; padding: 3px 10px; display: inline-block; }
-    .texto { font-size: 14px; line-height: 1.7; margin: 0 0 4mm; text-align: justify; }
-    .linha { font-size: 13px; margin-bottom: 2mm; }
-    .linha span { color: #555; }
-    .local { font-size: 13px; text-align: right; margin-top: 3mm; }
-    .ass { margin-top: auto; text-align: center; font-size: 13px; }
-    .traco { width: 70%; margin: 0 auto 2mm; border-top: 1px solid #111; }
-    .peq { font-size: 10px; color: #666; }
-    .rodape { font-size: 9px; color: #888; text-align: right; margin-top: 2mm; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #1f2937; margin: 0; padding: 18mm 20mm; }
+    .recibo { max-width: 170mm; margin: 0 auto; }
+    .cab { text-align: center; padding-bottom: 12px; border-bottom: 3px solid #059669; }
+    .emp { font-size: 24px; font-weight: 800; color: #059669; }
+    .emp-info { font-size: 11px; color: #6b7280; margin-top: 3px; }
+    .tit { font-size: 16px; color: #4b5563; margin-top: 6px; letter-spacing: .5px; }
+    .num { font-size: 12px; color: #9ca3af; margin-top: 2px; }
+    .valor { margin: 22px 0 18px; border: 2px solid #059669; border-radius: 12px; background: #ecfdf5; text-align: center; padding: 16px 10px; }
+    .valor .rot { font-size: 13px; color: #065f46; }
+    .valor .num-valor { font-size: 34px; font-weight: 800; color: #065f46; margin-top: 4px; }
+    .valor .ext { font-size: 12px; color: #047857; font-style: italic; margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 11px 10px; border-bottom: 1px solid #f0f0f0; font-size: 14px; vertical-align: top; }
+    td.rot { color: #4b5563; width: 42%; }
+    td.val { font-weight: 700; color: #111827; text-transform: none; }
+    .local { text-align: right; font-size: 13px; color: #374151; margin-top: 18px; }
+    .ass { display: flex; justify-content: space-between; gap: 30px; margin-top: 60px; }
+    .ass div { flex: 1; text-align: center; border-top: 1px solid #6b7280; padding-top: 6px; font-size: 12px; color: #4b5563; }
+    .ass b { display: block; font-size: 12px; color: #374151; font-weight: 400; margin-top: 2px; }
+    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
   </style></head><body>
-    ${via("1ª via — Empresa")}
-    <div class="corte">✂ - - - - - - - - - - - - - - - - recorte aqui - - - - - - - - - - - - - - - - ✂</div>
-    ${via("2ª via — Recebedor")}
-    <script>window.onload = () => { window.print(); };<\/script>
+  <div class="recibo">
+    <div class="cab">
+      <div class="emp">${esc(r.empresa.nome)}</div>
+      ${infoEmpresa ? `<div class="emp-info">${infoEmpresa}</div>` : ""}
+      <div class="tit">RECIBO DE PAGAMENTO</div>
+      <div class="num">Nº ${String(r.numero).padStart(4, "0")} · ${dataBR(r.data)}</div>
+    </div>
+    <div class="valor">
+      <div class="rot">Valor Recebido</div>
+      <div class="num-valor">${fmt(r.valor)}</div>
+      <div class="ext">(${esc(extenso(r.valor))})</div>
+    </div>
+    <table>
+      ${linha("📋", "Referente a", r.referente)}
+      ${linha("👤", "Recebido por", r.recebidoPor + (r.documentoRecebedor ? " — CPF/CNPJ: " + r.documentoRecebedor : ""))}
+      ${linha("🏢", "Pago por", r.pagoPor)}
+      ${linha("💳", "Forma de Pagamento", r.forma)}
+      ${linha("📅", "Data", dataBR(r.data))}
+      ${linha("📝", "Detalhes", r.detalhes)}
+    </table>
+    ${r.empresa.cidade ? `<div class="local">${esc(r.empresa.cidade)}, ${dataExtenso(r.data)}.</div>` : ""}
+    <div class="ass">
+      <div>Assinatura de Quem Recebe<b>${esc(r.recebidoPor)}</b></div>
+      <div>Assinatura de Quem Paga<b>${esc(r.pagoPor)}</b></div>
+    </div>
+  </div>
+  <script>window.onload = () => { window.print(); };<\/script>
   </body></html>`;
 
   const w = window.open("", "_blank");
@@ -169,6 +171,7 @@ export default function RecibosTab({ currentUser, empresas, setEmpresas, recibos
   const [erro, setErro] = useState("");
   const [mostrarEmpresas, setMostrarEmpresas] = useState(empresas.length === 0);
   const [busca, setBusca] = useState("");
+  const [editId, setEditId] = useState(null);   // recibo sendo editado
 
   const empresaSel = empresas.find((e) => e.id === form.empresaId) || empresaPadrao;
 
@@ -195,7 +198,7 @@ export default function RecibosTab({ currentUser, empresas, setEmpresas, recibos
     setForm({ ...form, empresaId: id, pagoPor });
   };
 
-  const gerar = () => {
+  const gerar = (imprimir = true) => {
     setErro("");
     const valor = lerValor(form.valor);
     if (!empresaSel) { setErro("Cadastre a empresa primeiro (botão 🏢 Empresas)."); setMostrarEmpresas(true); return; }
@@ -203,9 +206,10 @@ export default function RecibosTab({ currentUser, empresas, setEmpresas, recibos
     if (valor <= 0) { setErro("Informe um valor maior que zero."); return; }
     if (!form.recebidoPor.trim()) { setErro("Preencha 'Recebido por' (quem recebe o dinheiro e assina)."); return; }
 
-    const numero = recibos.reduce((m, r) => Math.max(m, r.numero || 0), 0) + 1;
+    const original = editId ? recibos.find((r) => r.id === editId) : null;
+    const numero = original ? original.numero : recibos.reduce((m, r) => Math.max(m, r.numero || 0), 0) + 1;
     const recibo = {
-      id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
+      id: original ? original.id : Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
       numero,
       empresa: { nome: empresaSel.nome, cnpj: empresaSel.cnpj, endereco: empresaSel.endereco, cidade: empresaSel.cidade, telefone: empresaSel.telefone },
       referente: form.referente.trim(),
@@ -216,18 +220,46 @@ export default function RecibosTab({ currentUser, empresas, setEmpresas, recibos
       forma: form.forma,
       data: form.data || hojeISO(),
       detalhes: form.detalhes.trim(),
-      criadoPor: currentUser?.nome || "",
-      criadoEm: new Date().toISOString(),
+      criadoPor: original ? original.criadoPor : currentUser?.nome || "",
+      criadoEm: original ? original.criadoEm : new Date().toISOString(),
+      ...(original ? { editadoPor: currentUser?.nome || "", editadoEm: new Date().toISOString() } : {}),
     };
-    setRecibos((prev) => [recibo, ...(prev || [])]);
-    imprimirRecibo(recibo);
+    if (original) setRecibos((prev) => prev.map((r) => (r.id === original.id ? recibo : r)));
+    else setRecibos((prev) => [recibo, ...(prev || [])]);
+    if (imprimir) imprimirRecibo(recibo);
+    setEditId(null);
     setForm({ ...formVazio(), empresaId: form.empresaId, pagoPor: empresaSel.nome });
+  };
+
+  const editar = (r) => {
+    const emp = empresas.find((e) => e.nome === r.empresa?.nome) || empresaPadrao;
+    setEditId(r.id);
+    setErro("");
+    setForm({
+      empresaId: emp?.id || "",
+      referente: r.referente || "",
+      valor: Number(r.valor || 0).toFixed(2).replace(".", ","),
+      recebidoPor: r.recebidoPor || "",
+      documentoRecebedor: r.documentoRecebedor || "",
+      pagoPor: r.pagoPor || "",
+      forma: r.forma || "Dinheiro",
+      data: r.data || hojeISO(),
+      detalhes: r.detalhes || "",
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const cancelarEdicao = () => {
+    setEditId(null);
+    setErro("");
+    setForm(formVazio());
   };
 
   const excluir = (r) => {
     if (!currentUser?.admin) { alert("Só administrador pode excluir recibos."); return; }
     if (!confirm(`Excluir o recibo Nº ${r.numero} (${r.recebidoPor} — ${fmt(r.valor)})?`)) return;
     setRecibos((prev) => prev.filter((x) => x.id !== r.id));
+    if (editId === r.id) cancelarEdicao();
   };
 
   const filtrados = useMemo(() => {
@@ -249,8 +281,10 @@ export default function RecibosTab({ currentUser, empresas, setEmpresas, recibos
       {mostrarEmpresas && <EmpresasCard empresas={empresas} setEmpresas={setEmpresas} />}
 
       {/* NOVO RECIBO */}
-      <div style={card}>
-        <h2 style={cardTitle}>🧾 Novo Recibo</h2>
+      <div style={{ ...card, borderColor: editId ? "#3B82F6" : "#1E293B" }}>
+        <h2 style={cardTitle}>
+          {editId ? `✏️ Editando recibo Nº ${String(recibos.find((r) => r.id === editId)?.numero || "").padStart(4, "0")}` : "🧾 Novo Recibo"}
+        </h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
           <div style={{ gridColumn: "1 / -1" }}>
             <label style={labelStyle}>Empresa</label>
@@ -300,9 +334,17 @@ export default function RecibosTab({ currentUser, empresas, setEmpresas, recibos
           </div>
         </div>
         {erro && <div style={{ ...alertaErro, marginTop: 12 }}>⚠️ {erro}</div>}
-        <button style={{ ...btn, background: "#059669", width: "100%", marginTop: 14, fontSize: 15, padding: "13px 20px" }} onClick={gerar}>
-          🧾 Gerar e Imprimir Recibo
-        </button>
+        {editId ? (
+          <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+            <button style={{ ...btn, background: "#059669", flex: 2, fontSize: 15, padding: "13px 20px" }} onClick={() => gerar(true)}>💾 Salvar e Imprimir</button>
+            <button style={{ ...btn, background: "#2563EB", flex: 1, fontSize: 15, padding: "13px 20px" }} onClick={() => gerar(false)}>💾 Só Salvar</button>
+            <button style={{ ...btn, background: "#374151", flex: 1, fontSize: 15, padding: "13px 20px" }} onClick={cancelarEdicao}>Cancelar</button>
+          </div>
+        ) : (
+          <button style={{ ...btn, background: "#059669", width: "100%", marginTop: 14, fontSize: 15, padding: "13px 20px" }} onClick={() => gerar(true)}>
+            🧾 Gerar e Imprimir Recibo
+          </button>
+        )}
       </div>
 
       {/* HISTÓRICO */}
@@ -333,12 +375,13 @@ export default function RecibosTab({ currentUser, empresas, setEmpresas, recibos
                     <td style={td}>{dataBR(r.data)}</td>
                     <td style={{ ...td, fontWeight: 700, color: "#F1F5F9" }}>
                       {r.recebidoPor}
-                      <div style={{ fontSize: 10, color: "#64748B", fontWeight: 400 }}>{r.empresa?.nome}{r.criadoPor ? ` · por ${r.criadoPor}` : ""}</div>
+                      <div style={{ fontSize: 10, color: "#64748B", fontWeight: 400 }}>{r.empresa?.nome}{r.criadoPor ? ` · por ${r.criadoPor}` : ""}{r.editadoPor ? ` · editado por ${r.editadoPor}` : ""}</div>
                     </td>
                     <td style={td}>{r.referente}<div style={{ fontSize: 10, color: "#64748B" }}>{r.forma}</div></td>
                     <td style={{ ...td, textAlign: "right", color: "#10B981", fontWeight: 800 }}>{fmt(r.valor)}</td>
                     <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
                       <button style={{ ...miniBtn, background: "#2563EB" }} onClick={() => imprimirRecibo(r)} title="Reimprimir">🖨️</button>{" "}
+                      <button style={{ ...miniBtn, background: "#B45309" }} onClick={() => editar(r)} title="Editar">✏️</button>{" "}
                       {currentUser?.admin && <button style={{ ...miniBtn, background: "#7F1D1D" }} onClick={() => excluir(r)} title="Excluir">🗑️</button>}
                     </td>
                   </tr>
