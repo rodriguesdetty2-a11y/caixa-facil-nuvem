@@ -39,6 +39,15 @@ export default function FolhaModulo({ currentUser }) {
   });
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
+  const [aberta, setAberta] = useState(true);
+
+  // Enquanto a Folha está aberta em tela cheia, trava a rolagem do CaixaFácil por trás
+  useEffect(() => {
+    if (!aberta) return;
+    const antes = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = antes; };
+  }, [aberta]);
 
   useEffect(() => {
     if (!isSupabaseReady()) {
@@ -71,31 +80,44 @@ export default function FolhaModulo({ currentUser }) {
   const unidade = unidades.find((u) => u.id === unidadeId) || unidades[0];
   const url = `/folha-app.html?unidade=${encodeURIComponent(unidade.id)}`;
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 16, fontWeight: 800, color: "#F1F5F9" }}>📋 Folha</span>
-          {unidades.length > 1 ? (
-            <select value={unidade.id} onChange={(e) => setUnidadeId(e.target.value)} style={selectStyle}>
-              {unidades.map((u) => <option key={u.id} value={u.id}>🏢 {u.nome}</option>)}
-            </select>
-          ) : (
-            <span style={unidadePill}>🏢 {unidade.nome}</span>
-          )}
-        </div>
-        <a href={url} target="_blank" rel="noreferrer" style={linkTelaCheia}>⛶ Abrir em tela cheia</a>
-      </div>
+  const seletorUnidade = unidades.length > 1 ? (
+    <select value={unidade.id} onChange={(e) => setUnidadeId(e.target.value)} style={selectStyle}>
+      {unidades.map((u) => <option key={u.id} value={u.id}>🏢 {u.nome}</option>)}
+    </select>
+  ) : (
+    <span style={unidadePill}>🏢 {unidade.nome}</span>
+  );
 
-      {/* Ocupa a largura toda da janela para o sistema ter espaço para o menu lateral */}
-      <div style={{ width: "100vw", marginLeft: "calc(50% - 50vw)", borderTop: "1px solid #1E293B" }}>
-        <iframe
-          key={unidade.id}
-          src={url}
-          title="Folha de Pagamento"
-          style={{ width: "100%", height: "calc(100vh - 150px)", minHeight: 520, border: "none", display: "block", background: "#0a1410" }}
-        />
+  // Folha minimizada: mostra o CaixaFácil normal com um botão para reabrir
+  if (!aberta) {
+    return (
+      <div style={{ ...card, textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+        <div style={{ fontSize: 40 }}>📋</div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "#F1F5F9" }}>Folha de Pagamento</div>
+        {seletorUnidade}
+        <button onClick={() => setAberta(true)} style={btnAbrir}>📋 Abrir a Folha</button>
+        <div style={{ fontSize: 12, color: "#64748B" }}>Para voltar ao caixa, use as abas lá em cima.</div>
       </div>
+    );
+  }
+
+  // Folha aberta: ocupa a tela inteira, com uma barrinha fina no topo
+  return (
+    <div style={overlay}>
+      <div style={barra}>
+        <button onClick={() => setAberta(false)} style={btnVoltar}>← Voltar ao CaixaFácil</button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={{ fontSize: 13, fontWeight: 800, color: "#F1F5F9", whiteSpace: "nowrap" }}>📋 Folha</span>
+          {seletorUnidade}
+        </div>
+        <a href={url} target="_blank" rel="noreferrer" style={linkTelaCheia} title="Abre a Folha sozinha em outra aba do navegador">⛶ Outra aba</a>
+      </div>
+      <iframe
+        key={unidade.id}
+        src={url}
+        title="Folha de Pagamento"
+        style={{ flex: 1, width: "100%", border: "none", display: "block", background: "#0a1410" }}
+      />
     </div>
   );
 }
@@ -104,4 +126,8 @@ const card = { background: "#0F172A", border: "1px solid #1E293B", borderRadius:
 const alertaErro = { background: "#450a0a", border: "1px solid #EF444455", color: "#FCA5A5", borderRadius: 8, padding: "10px 12px", fontSize: 13 };
 const unidadePill = { fontSize: 12, color: "#F97316", background: "#F9731622", border: "1px solid #F9731555", borderRadius: 8, padding: "5px 10px", fontWeight: 700 };
 const selectStyle = { background: "#1E293B", border: "1px solid #334155", borderRadius: 8, padding: "7px 10px", color: "#F1F5F9", fontSize: 13 };
+const overlay = { position: "fixed", inset: 0, zIndex: 1000, display: "flex", flexDirection: "column", background: "#0a1410" };
+const barra = { height: 40, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "0 10px", background: "#020817", borderBottom: "1px solid #1E293B" };
+const btnVoltar = { background: "#10B981", border: "none", borderRadius: 8, color: "#022c22", fontWeight: 800, fontSize: 13, padding: "6px 12px", cursor: "pointer", whiteSpace: "nowrap" };
+const btnAbrir = { background: "#10B981", border: "none", borderRadius: 10, color: "#022c22", fontWeight: 800, fontSize: 15, padding: "12px 24px", cursor: "pointer" };
 const linkTelaCheia = { fontSize: 12, color: "#94A3B8", border: "1px solid #334155", borderRadius: 8, padding: "6px 12px", textDecoration: "none", fontWeight: 600 };
