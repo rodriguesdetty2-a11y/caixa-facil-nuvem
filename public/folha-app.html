@@ -94,14 +94,14 @@
   /* ---- Nuvem (CaixaFácil) ---- */
   #btnLogout, #btnLogoutMobile { display: none !important; }
   #cloudOverlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: #0a1410; color: #e8f5ef; font-family: Inter, sans-serif; text-align: center; padding: 24px; }
-  #cloudStatus { position: fixed; left: 10px; bottom: 10px; z-index: 70; font-size: 11px; padding: 4px 10px; border-radius: 999px; background: #0f3d2e; color: #c8e6d4; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+  #cloudStatus { cursor: pointer; position: fixed; left: 10px; bottom: 10px; z-index: 70; font-size: 11px; padding: 4px 10px; border-radius: 999px; background: #0f3d2e; color: #c8e6d4; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
   #cloudStatus.erro { background: #7f1d1d; color: #fecaca; }
   #cloudStatus.salvando { background: #92400e; color: #fde68a; }
 </style>
 </head>
 <body class="text-slate-800 dark:text-slate-100">
 <div id="cloudOverlay"><div><div style="font-size:42px">☁️</div><div id="cloudOverlayMsg" style="margin-top:10px;font-size:15px">Carregando a folha da nuvem...</div></div></div>
-<div id="cloudStatus">☁️ Nuvem</div>
+<div id="cloudStatus" title="Clique para buscar agora o que outros usuários lançaram">☁️ Nuvem</div>
 
 <!-- ============================ LOGIN ============================ -->
 <div id="loginView" class="hidden min-h-screen w-full grid place-items-center px-4 py-10 relative overflow-hidden">
@@ -334,8 +334,19 @@ function usuarioCaixa() {
 }
 function setCloudStatus(txt, cls='') {
   const el = document.getElementById('cloudStatus'); if (!el) return;
-  el.textContent = txt; el.className = cls;
+  el.textContent = txt + '  ·  🔄 Sincronizar'; el.className = cls;
 }
+// Clicar no selo busca na hora o que outros usuários lançaram
+document.getElementById('cloudStatus').addEventListener('click', async () => {
+  if (!cloudPronto) return;
+  if (cloudSalvando || cloudPendente) { toast('Aguarde terminar de salvar...', 'info'); return; }
+  setCloudStatus('🔄 Buscando na nuvem...', 'salvando');
+  try {
+    const r = await cloudLerRev();
+    if (r.rev !== cloudRev) { await recarregarDaNuvem(true); toast('Dados atualizados', 'success'); }
+    else { setCloudStatus('☁️ Tudo atualizado'); }
+  } catch(e) { setCloudStatus('⚠️ Sem conexão com a nuvem', 'erro'); }
+});
 function dadosParaNuvem() {
   const { session, auth, ui, ...resto } = state;
   return resto;
@@ -4552,7 +4563,7 @@ Object.assign(window, {
     showApp();
     setCloudStatus('☁️ Nuvem conectada');
     if (!remoto) toast('Folha vazia nesta unidade. Clique em Importar (laranja) e escolha o backup do sistema antigo.', 'info');
-    setInterval(verificarAtualizacoes, 20000);
+    setInterval(verificarAtualizacoes, 10000);
     window.addEventListener('focus', verificarAtualizacoes);
   } catch (e) {
     console.error(e);
