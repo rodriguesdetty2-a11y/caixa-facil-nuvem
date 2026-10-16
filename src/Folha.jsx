@@ -1,57 +1,17 @@
 // ══════════════════════════════════════════════════════════════
-//  MÓDULO FOLHA — Etapa 2A (prova de conceito)
-//  - Usa o MESMO Supabase e o MESMO login (tabela conferentes)
-//  - Lê/escreve apenas tabelas com prefixo folha_
-//  - Não mexe em nada do CaixaFácil (app_state, conferentes)
+//  MÓDULO FOLHA
+//  Abre o sistema "Controle de Folha e Recibos" (o mesmo de antes,
+//  com todas as telas) dentro do CaixaFácil, salvando na nuvem.
+//  O sistema fica em public/folha-app.html
+//  Os dados de cada unidade ficam na tabela app_state,
+//  na linha "folha_state_<id da unidade>".
 // ══════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { supabase, isSupabaseReady } from "./supabase";
 
-const fmtBRL = (v) =>
-  (Number(v) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-
-const fmtData = (d) => {
-  if (!d) return "—";
-  const [a, m, dia] = String(d).slice(0, 10).split("-");
-  return `${dia}/${m}/${a}`;
-};
-
-// Aceita "1.234,56", "1234,56", "1234.56"
-const parseValor = (s) => {
-  if (s === null || s === undefined || s === "") return 0;
-  const t = String(s).trim();
-  const n = t.includes(",") ? Number(t.replace(/\./g, "").replace(",", ".")) : Number(t);
-  return isNaN(n) ? 0 : n;
-};
-
-const formatCPF = (s) => {
-  const d = String(s || "").replace(/\D/g, "").slice(0, 11);
-  return d
-    .replace(/(\d{3})(\d)/, "$1.$2")
-    .replace(/(\d{3})(\d)/, "$1.$2")
-    .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
-};
-
-const formatTel = (s) => {
-  const d = String(s || "").replace(/\D/g, "").slice(0, 11);
-  if (d.length <= 10) return d.replace(/(\d{2})(\d)/, "($1) $2").replace(/(\d{4})(\d)/, "$1-$2");
-  return d.replace(/(\d{2})(\d)/, "($1) $2").replace(/(\d{5})(\d)/, "$1-$2");
-};
-
-const FORM_VAZIO = {
-  nome: "",
-  cpf: "",
-  telefone: "",
-  cargo: "",
-  data_admissao: "",
-  salario: "",
-  observacoes: "",
-};
-
-/* ══════ UNIDADES QUE O USUÁRIO PODE VER ══════
-   Regra: se o conferente NÃO tem linha em folha_conferentes_unidades,
-   ele vê TODAS as unidades. Se tem, vê só as listadas. Admin vê tudo. */
+/* Unidades que o usuário pode ver.
+   Se o conferente NÃO tem linha em folha_conferentes_unidades, vê todas. Admin vê todas. */
 async function carregarUnidades(currentUser) {
   const { data: unidades, error } = await supabase
     .from("folha_unidades")
@@ -59,7 +19,7 @@ async function carregarUnidades(currentUser) {
     .order("ordem", { ascending: true });
   if (error) throw new Error("Erro ao carregar unidades: " + error.message);
 
-  let lista = (unidades || []).filter((u) => u.ativa !== false);
+  const lista = (unidades || []).filter((u) => u.ativa !== false);
   if (currentUser?.admin) return lista;
 
   const { data: vinc, error: e2 } = await supabase
@@ -72,9 +32,6 @@ async function carregarUnidades(currentUser) {
   return lista.filter((u) => ids.has(u.id));
 }
 
-/* ══════════════════════════════════════
-   COMPONENTE PRINCIPAL
-══════════════════════════════════════ */
 export default function FolhaModulo({ currentUser }) {
   const [unidades, setUnidades] = useState([]);
   const [unidadeId, setUnidadeId] = useState(() => {
@@ -82,7 +39,6 @@ export default function FolhaModulo({ currentUser }) {
   });
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
-  const [sub, setSub] = useState("funcionarios");
 
   useEffect(() => {
     if (!isSupabaseReady()) {
@@ -94,9 +50,7 @@ export default function FolhaModulo({ currentUser }) {
       try {
         const lista = await carregarUnidades(currentUser);
         setUnidades(lista);
-        if (lista.length > 0 && !lista.some((u) => u.id === unidadeId)) {
-          setUnidadeId(lista[0].id);
-        }
+        if (lista.length > 0 && !lista.some((u) => u.id === unidadeId)) setUnidadeId(lista[0].id);
       } catch (e) {
         setErro(e.message);
       } finally {
@@ -107,543 +61,47 @@ export default function FolhaModulo({ currentUser }) {
   }, []);
 
   useEffect(() => {
-    if (unidadeId) {
-      try { localStorage.setItem("folha_unidade_sel", unidadeId); } catch {}
-    }
+    if (unidadeId) { try { localStorage.setItem("folha_unidade_sel", unidadeId); } catch {} }
   }, [unidadeId]);
 
-  const unidade = unidades.find((u) => u.id === unidadeId);
+  if (carregando) return <div style={{ ...card, textAlign: "center", color: "#94A3B8" }}>☁️ Carregando módulo Folha...</div>;
+  if (erro) return <div style={{ ...card, ...alertaErro }}>⚠️ {erro}</div>;
+  if (unidades.length === 0) return <div style={{ ...card, ...alertaErro }}>⚠️ Nenhuma unidade disponível para o seu usuário. Fale com o administrador.</div>;
 
-  if (carregando) {
-    return <div style={{ ...card, textAlign: "center", color: "#94A3B8" }}>☁️ Carregando módulo Folha...</div>;
-  }
-  if (erro) {
-    return <div style={{ ...card, ...alertaErro }}>⚠️ {erro}</div>;
-  }
-  if (unidades.length === 0) {
-    return (
-      <div style={{ ...card, ...alertaErro }}>
-        ⚠️ Nenhuma unidade disponível para o seu usuário. Fale com o administrador.
-      </div>
-    );
-  }
+  const unidade = unidades.find((u) => u.id === unidadeId) || unidades[0];
+  const url = `/folha-app.html?unidade=${encodeURIComponent(unidade.id)}`;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Cabeçalho do módulo: unidade + sub-abas */}
-      <div style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 18, fontWeight: 800, color: "#F1F5F9" }}>📋 Folha</span>
+          <span style={{ fontSize: 16, fontWeight: 800, color: "#F1F5F9" }}>📋 Folha</span>
           {unidades.length > 1 ? (
-            <select value={unidadeId} onChange={(e) => setUnidadeId(e.target.value)} style={{ ...inputStyle, width: "auto", padding: "7px 10px" }}>
+            <select value={unidade.id} onChange={(e) => setUnidadeId(e.target.value)} style={selectStyle}>
               {unidades.map((u) => <option key={u.id} value={u.id}>🏢 {u.nome}</option>)}
             </select>
           ) : (
-            <span style={unidadePill}>🏢 {unidade?.nome}</span>
+            <span style={unidadePill}>🏢 {unidade.nome}</span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button style={sub === "funcionarios" ? subAtiva : subInativa} onClick={() => setSub("funcionarios")}>👷 Funcionários</button>
-          <button style={subEmBreve} disabled title="Próxima etapa">💸 Saídas (em breve)</button>
-          <button style={subEmBreve} disabled title="Próxima etapa">🧾 Folha do mês (em breve)</button>
-        </div>
+        <a href={url} target="_blank" rel="noreferrer" style={linkTelaCheia}>⛶ Abrir em tela cheia</a>
       </div>
 
-      {sub === "funcionarios" && unidade && (
-        <FuncionariosTela key={unidade.id} unidade={unidade} currentUser={currentUser} />
-      )}
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════
-   TELA DE FUNCIONÁRIOS (CRUD)
-══════════════════════════════════════ */
-function FuncionariosTela({ unidade, currentUser }) {
-  const [lista, setLista] = useState([]);
-  const [carregando, setCarregando] = useState(true);
-  const [salvando, setSalvando] = useState(false);
-  const [erro, setErro] = useState("");
-  const [sucesso, setSucesso] = useState("");
-  const [form, setForm] = useState(FORM_VAZIO);
-  const [editId, setEditId] = useState(null);
-  const [busca, setBusca] = useState("");
-  const [filtro, setFiltro] = useState("ativos"); // ativos | inativos | todos
-  const [mostrarImport, setMostrarImport] = useState(false);
-
-  const avisar = (msg) => {
-    setSucesso(msg);
-    setTimeout(() => setSucesso(""), 3000);
-  };
-
-  const recarregar = async () => {
-    setCarregando(true);
-    const { data, error } = await supabase
-      .from("folha_funcionarios")
-      .select("id, nome, cpf, telefone, cargo, data_admissao, salario, observacoes, ativo, criado_em")
-      .eq("unidade_id", unidade.id)
-      .order("nome", { ascending: true });
-    if (error) setErro("Erro ao carregar funcionários: " + error.message);
-    else { setErro(""); setLista(data || []); }
-    setCarregando(false);
-  };
-
-  useEffect(() => { recarregar(); /* eslint-disable-next-line */ }, [unidade.id]);
-
-  const limparForm = () => { setForm(FORM_VAZIO); setEditId(null); };
-
-  const salvar = async () => {
-    setErro("");
-    const nome = form.nome.trim();
-    if (!nome) { setErro("Informe o nome do funcionário."); return; }
-
-    const duplicado = lista.find(
-      (f) => f.id !== editId && f.nome.trim().toLowerCase() === nome.toLowerCase()
-    );
-    if (duplicado && !confirm(`Já existe "${duplicado.nome}" nesta unidade. Salvar mesmo assim?`)) return;
-
-    const registro = {
-      nome: nome.toUpperCase(),
-      cpf: form.cpf.trim() || null,
-      telefone: form.telefone.trim() || null,
-      cargo: form.cargo.trim() || null,
-      data_admissao: form.data_admissao || null,
-      salario: parseValor(form.salario),
-      observacoes: form.observacoes.trim() || null,
-    };
-
-    setSalvando(true);
-    let error;
-    if (editId) {
-      ({ error } = await supabase
-        .from("folha_funcionarios")
-        .update({ ...registro, atualizado_em: new Date().toISOString() })
-        .eq("id", editId));
-    } else {
-      ({ error } = await supabase
-        .from("folha_funcionarios")
-        .insert({ ...registro, unidade_id: unidade.id, ativo: true }));
-    }
-    setSalvando(false);
-
-    if (error) { setErro("Erro ao salvar: " + error.message); return; }
-    avisar(editId ? "✅ Funcionário atualizado!" : "✅ Funcionário cadastrado!");
-    limparForm();
-    recarregar();
-  };
-
-  const editar = (f) => {
-    setEditId(f.id);
-    setForm({
-      nome: f.nome || "",
-      cpf: f.cpf || "",
-      telefone: f.telefone || "",
-      cargo: f.cargo || "",
-      data_admissao: f.data_admissao ? String(f.data_admissao).slice(0, 10) : "",
-      salario: f.salario ? String(Number(f.salario).toFixed(2)).replace(".", ",") : "",
-      observacoes: f.observacoes || "",
-    });
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  const alternarAtivo = async (f) => {
-    const acao = f.ativo ? "DESATIVAR" : "REATIVAR";
-    if (!confirm(`${acao} ${f.nome}?`)) return;
-    const { error } = await supabase
-      .from("folha_funcionarios")
-      .update({ ativo: !f.ativo, atualizado_em: new Date().toISOString() })
-      .eq("id", f.id);
-    if (error) { setErro("Erro: " + error.message); return; }
-    avisar(f.ativo ? "Funcionário desativado." : "Funcionário reativado.");
-    recarregar();
-  };
-
-  const excluir = async (f) => {
-    if (!currentUser?.admin) { alert("Só administrador pode excluir. Use 'Desativar'."); return; }
-    if (!confirm(`EXCLUIR DEFINITIVAMENTE ${f.nome}?\n\nIsso apaga também todos os lançamentos dele na Folha (saídas, comissões etc).\nSe ele só saiu da empresa, prefira DESATIVAR.`)) return;
-    const { error } = await supabase.from("folha_funcionarios").delete().eq("id", f.id);
-    if (error) { setErro("Erro ao excluir: " + error.message); return; }
-    if (editId === f.id) limparForm();
-    avisar("🗑️ Funcionário excluído.");
-    recarregar();
-  };
-
-  const filtrados = useMemo(() => {
-    const b = busca.trim().toLowerCase();
-    return lista.filter((f) => {
-      if (filtro === "ativos" && !f.ativo) return false;
-      if (filtro === "inativos" && f.ativo) return false;
-      if (!b) return true;
-      return (
-        f.nome?.toLowerCase().includes(b) ||
-        f.cargo?.toLowerCase().includes(b) ||
-        (f.cpf || "").replace(/\D/g, "").includes(b.replace(/\D/g, "") || "§")
-      );
-    });
-  }, [lista, busca, filtro]);
-
-  const qtdAtivos = lista.filter((f) => f.ativo).length;
-  const qtdInativos = lista.length - qtdAtivos;
-  const totalSalarios = lista.filter((f) => f.ativo).reduce((s, f) => s + (Number(f.salario) || 0), 0);
-
-  const campo = (k) => ({
-    value: form[k],
-    onChange: (e) => setForm({ ...form, [k]: e.target.value }),
-  });
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {currentUser?.admin && !mostrarImport && (
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button style={{ ...btn, background: "#EA580C" }} onClick={() => setMostrarImport(true)}>
-            📥 Importar funcionários do sistema antigo
-          </button>
-        </div>
-      )}
-      {mostrarImport && (
-        <ImportarAntigo
-          unidade={unidade}
-          existentes={lista}
-          onFechar={() => setMostrarImport(false)}
-          onImportado={(qtd) => { setMostrarImport(false); avisar(`✅ ${qtd} funcionário(s) importado(s)!`); recarregar(); }}
+      {/* Ocupa a largura toda da janela para o sistema ter espaço para o menu lateral */}
+      <div style={{ width: "100vw", marginLeft: "calc(50% - 50vw)", borderTop: "1px solid #1E293B" }}>
+        <iframe
+          key={unidade.id}
+          src={url}
+          title="Folha de Pagamento"
+          style={{ width: "100%", height: "calc(100vh - 150px)", minHeight: 520, border: "none", display: "block", background: "#0a1410" }}
         />
-      )}
-
-      {/* FORMULÁRIO */}
-      <div style={{ ...card, borderColor: editId ? "#3B82F6" : "#1E293B" }}>
-        <h2 style={cardTitle}>{editId ? "✏️ Editando funcionário" : "➕ Novo funcionário"}</h2>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12 }}>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={labelStyle}>Nome completo *</label>
-            <input style={inputStyle} placeholder="Ex: JOSÉ DA SILVA" {...campo("nome")}
-              onKeyDown={(e) => e.key === "Enter" && salvar()} />
-          </div>
-          <div>
-            <label style={labelStyle}>Cargo / Função</label>
-            <input style={inputStyle} placeholder="Ex: Motorista" {...campo("cargo")} />
-          </div>
-          <div>
-            <label style={labelStyle}>Salário (R$)</label>
-            <input style={inputStyle} inputMode="decimal" placeholder="0,00" {...campo("salario")} />
-          </div>
-          <div>
-            <label style={labelStyle}>Data de admissão</label>
-            <input style={inputStyle} type="date" {...campo("data_admissao")} />
-          </div>
-          <div>
-            <label style={labelStyle}>CPF</label>
-            <input style={inputStyle} inputMode="numeric" placeholder="000.000.000-00"
-              value={form.cpf} onChange={(e) => setForm({ ...form, cpf: formatCPF(e.target.value) })} />
-          </div>
-          <div>
-            <label style={labelStyle}>Telefone / WhatsApp</label>
-            <input style={inputStyle} inputMode="tel" placeholder="(87) 99999-9999"
-              value={form.telefone} onChange={(e) => setForm({ ...form, telefone: formatTel(e.target.value) })} />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={labelStyle}>Observações</label>
-            <input style={inputStyle} placeholder="Opcional" {...campo("observacoes")} />
-          </div>
-        </div>
-
-        {erro && <div style={{ ...alertaErro, marginTop: 12 }}>⚠️ {erro}</div>}
-        {sucesso && <div style={{ ...alertaOk, marginTop: 12 }}>{sucesso}</div>}
-
-        <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
-          <button style={{ ...btn, background: "#10B981", opacity: salvando ? 0.6 : 1 }} onClick={salvar} disabled={salvando}>
-            {salvando ? "Salvando..." : editId ? "💾 Salvar alterações" : "➕ Cadastrar"}
-          </button>
-          {editId && <button style={{ ...btn, background: "#374151" }} onClick={limparForm}>Cancelar</button>}
-        </div>
-      </div>
-
-      {/* RESUMO */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
-        <Indicador titulo="👷 Ativos" valor={qtdAtivos} cor="#10B981" />
-        <Indicador titulo="💤 Inativos" valor={qtdInativos} cor="#64748B" />
-        <Indicador titulo="💰 Salários (ativos)" valor={fmtBRL(totalSalarios)} cor="#3B82F6" />
-      </div>
-
-      {/* LISTA */}
-      <div style={card}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-          <h2 style={{ ...cardTitle, marginBottom: 0 }}>Funcionários — {unidade.nome}</h2>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <input style={{ ...inputStyle, width: 200, padding: "7px 10px" }} placeholder="🔍 Buscar nome, cargo, CPF"
-              value={busca} onChange={(e) => setBusca(e.target.value)} />
-            <select style={{ ...inputStyle, width: "auto", padding: "7px 10px" }} value={filtro} onChange={(e) => setFiltro(e.target.value)}>
-              <option value="ativos">Ativos</option>
-              <option value="inativos">Inativos</option>
-              <option value="todos">Todos</option>
-            </select>
-          </div>
-        </div>
-
-        {carregando ? (
-          <div style={{ color: "#64748B", textAlign: "center", padding: 20 }}>Carregando...</div>
-        ) : filtrados.length === 0 ? (
-          <div style={{ color: "#475569", textAlign: "center", padding: 20 }}>
-            {lista.length === 0 ? "Nenhum funcionário cadastrado nesta unidade ainda." : "Nenhum funcionário encontrado com esse filtro."}
-          </div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 680 }}>
-              <thead>
-                <tr>
-                  <th style={th}>Nome</th>
-                  <th style={th}>Cargo</th>
-                  <th style={{ ...th, textAlign: "right" }}>Salário</th>
-                  <th style={th}>Admissão</th>
-                  <th style={th}>Telefone</th>
-                  <th style={{ ...th, textAlign: "center" }}>Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtrados.map((f, i) => (
-                  <tr key={f.id} style={{ background: i % 2 === 0 ? "#0F172A" : "#0D1527", opacity: f.ativo ? 1 : 0.55 }}>
-                    <td style={{ ...td, fontWeight: 700, color: "#F1F5F9" }}>
-                      {f.nome}
-                      {!f.ativo && <span style={inativoPill}>INATIVO</span>}
-                      {f.cpf && <div style={{ fontSize: 10, color: "#64748B", fontWeight: 400 }}>CPF {f.cpf}</div>}
-                      {f.observacoes && <div style={{ fontSize: 10, color: "#64748B", fontWeight: 400 }}>📝 {f.observacoes}</div>}
-                    </td>
-                    <td style={td}>{f.cargo || "—"}</td>
-                    <td style={{ ...td, textAlign: "right", color: "#3B82F6", fontWeight: 700 }}>{fmtBRL(f.salario)}</td>
-                    <td style={td}>{fmtData(f.data_admissao)}</td>
-                    <td style={td}>{f.telefone || "—"}</td>
-                    <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
-                      <button style={{ ...miniBtn, background: "#2563EB" }} onClick={() => editar(f)} title="Editar">✏️</button>{" "}
-                      <button style={{ ...miniBtn, background: f.ativo ? "#B45309" : "#059669" }} onClick={() => alternarAtivo(f)} title={f.ativo ? "Desativar" : "Reativar"}>
-                        {f.ativo ? "💤" : "♻️"}
-                      </button>{" "}
-                      {currentUser?.admin && (
-                        <button style={{ ...miniBtn, background: "#7F1D1D" }} onClick={() => excluir(f)} title="Excluir">🗑️</button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
-/* ══════════════════════════════════════
-   IMPORTAR FUNCIONÁRIOS DO SISTEMA ANTIGO
-   (backup .json do "Controle de Folha e Recibos")
-══════════════════════════════════════ */
-
-// Procura a lista de funcionários em qualquer formato de backup do sistema antigo
-function acharEmployees(obj, prof = 0) {
-  if (!obj || typeof obj !== "object" || prof > 4) return null;
-  if (Array.isArray(obj.employees)) return obj.employees;
-  for (const k of ["data", "state", "backup", "dados"]) {
-    const r = acharEmployees(obj[k], prof + 1);
-    if (r) return r;
-  }
-  return null;
-}
-
-const normNome = (s) =>
-  String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
-const soDigitos = (s) => String(s || "").replace(/\D/g, "");
-
-function ImportarAntigo({ unidade, existentes, onFechar, onImportado }) {
-  const [itens, setItens] = useState(null); // [{ orig, sel, duplicado }]
-  const [arquivo, setArquivo] = useState("");
-  const [comFotos, setComFotos] = useState(true);
-  const [erro, setErro] = useState("");
-  const [gravando, setGravando] = useState(false);
-
-  const lerArquivo = (ev) => {
-    setErro(""); setItens(null);
-    const f = ev.target.files?.[0];
-    if (!f) return;
-    setArquivo(f.name);
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const json = JSON.parse(reader.result);
-        const emps = acharEmployees(json);
-        if (!emps) { setErro("Não encontrei funcionários nesse arquivo. Confira se é o backup do sistema de Folha antigo."); return; }
-        if (emps.length === 0) { setErro("O backup não tem nenhum funcionário."); return; }
-        const nomesExist = new Set(existentes.map((e) => normNome(e.nome)));
-        const cpfsExist = new Set(existentes.map((e) => soDigitos(e.cpf)).filter((c) => c.length === 11));
-        const lista = emps
-          .filter((e) => (e.name || e.nome || "").trim())
-          .map((e) => {
-            const nome = e.name || e.nome;
-            const cpf = soDigitos(e.cpf);
-            const duplicado = nomesExist.has(normNome(nome)) || (cpf.length === 11 && cpfsExist.has(cpf));
-            return { orig: e, sel: !duplicado, duplicado };
-          })
-          .sort((a, b) => normNome(a.orig.name || a.orig.nome).localeCompare(normNome(b.orig.name || b.orig.nome)));
-        setItens(lista);
-      } catch {
-        setErro("Arquivo inválido. Escolha o arquivo .json do backup.");
-      }
-    };
-    reader.readAsText(f);
-  };
-
-  const alternar = (i) => setItens(itens.map((it, j) => (j === i ? { ...it, sel: !it.sel } : it)));
-  const marcarTodos = (v) => setItens(itens.map((it) => ({ ...it, sel: v && !it.duplicado ? true : v ? it.sel : false })));
-
-  const selecionados = (itens || []).filter((it) => it.sel);
-
-  const importar = async () => {
-    if (selecionados.length === 0) return;
-    if (!confirm(`Importar ${selecionados.length} funcionário(s) para ${unidade.nome}?`)) return;
-    setGravando(true); setErro("");
-
-    const montar = (e, comLegado) => {
-      const r = {
-        unidade_id: unidade.id,
-        nome: String(e.name || e.nome).trim().toUpperCase(),
-        cpf: e.cpf ? formatCPF(e.cpf) || String(e.cpf) : null,
-        telefone: e.phone || e.telefone || null,
-        cargo: e.cargo || null,
-        data_admissao: /^\d{4}-\d{2}-\d{2}/.test(e.admissao || "") ? String(e.admissao).slice(0, 10) : null,
-        salario: Number(e.salario) || 0,
-        observacoes: e.obs || e.observacoes || null,
-        foto_base64: comFotos && e.foto ? e.foto : null,
-        ativo: e.ativo === false ? false : true,
-      };
-      if (comLegado && e.id) r.legado_id = String(e.id);
-      return r;
-    };
-
-    // Grava em lotes de 10 (fotos podem deixar o envio pesado)
-    const enviar = async (comLegado) => {
-      let total = 0;
-      for (let i = 0; i < selecionados.length; i += 10) {
-        const lote = selecionados.slice(i, i + 10).map((it) => montar(it.orig, comLegado));
-        const { error } = await supabase.from("folha_funcionarios").insert(lote);
-        if (error) return { error, total };
-        total += lote.length;
-      }
-      return { total };
-    };
-
-    let res = await enviar(true);
-    // Se a coluna legado_id ainda não existir no Supabase, tenta sem ela
-    if (res.error && res.total === 0 && /legado_id/i.test(res.error.message || "")) {
-      res = await enviar(false);
-      if (!res.error) alert("⚠️ Importado, mas sem o código de ligação com o sistema antigo.\nRode o SQL da coluna legado_id antes da Fase 2 (importação das saídas).");
-    }
-    setGravando(false);
-    if (res.error) {
-      setErro(`Erro ao gravar (${res.total} já tinham sido importados): ${res.error.message}`);
-      return;
-    }
-    onImportado(res.total);
-  };
-
-  return (
-    <div style={{ ...card, borderColor: "#EA580C" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10 }}>
-        <h2 style={{ ...cardTitle, marginBottom: 0 }}>📥 Importar do sistema antigo → {unidade.nome}</h2>
-        <button style={{ ...btn, background: "#374151", padding: "6px 12px" }} onClick={onFechar} disabled={gravando}>✕ Fechar</button>
-      </div>
-
-      <div style={{ fontSize: 13, color: "#94A3B8", marginBottom: 12, lineHeight: 1.5 }}>
-        No sistema antigo (FUNCIONARIOS.html) clique em <strong style={{ color: "#F1F5F9" }}>Backup</strong> e escolha aqui o arquivo <strong style={{ color: "#F1F5F9" }}>.json</strong> que ele baixou.
-        Nada é gravado antes de você conferir a lista e confirmar.
-      </div>
-
-      <label style={{ ...btn, background: "#1E293B", border: "1px dashed #EA580C", display: "inline-block", color: "#FDBA74" }}>
-        📂 {arquivo ? `Arquivo: ${arquivo} (trocar)` : "Escolher arquivo de backup"}
-        <input type="file" accept=".json,application/json" onChange={lerArquivo} style={{ display: "none" }} />
-      </label>
-
-      {erro && <div style={{ ...alertaErro, marginTop: 12 }}>⚠️ {erro}</div>}
-
-      {itens && (
-        <div style={{ marginTop: 16 }}>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10, fontSize: 13 }}>
-            <span style={{ color: "#F1F5F9" }}><strong>{itens.length}</strong> no backup</span>
-            <span style={{ color: "#10B981" }}><strong>{selecionados.length}</strong> marcados</span>
-            {itens.some((i) => i.duplicado) && (
-              <span style={{ color: "#F59E0B" }}><strong>{itens.filter((i) => i.duplicado).length}</strong> já cadastrados (desmarcados)</span>
-            )}
-            <button style={{ ...miniBtn, background: "#334155" }} onClick={() => marcarTodos(true)}>Marcar novos</button>
-            <button style={{ ...miniBtn, background: "#334155" }} onClick={() => marcarTodos(false)}>Desmarcar todos</button>
-            <label style={{ color: "#94A3B8", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-              <input type="checkbox" checked={comFotos} onChange={(e) => setComFotos(e.target.checked)} /> Importar fotos
-            </label>
-          </div>
-
-          <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto", border: "1px solid #1E293B", borderRadius: 10 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
-              <thead>
-                <tr>
-                  <th style={{ ...th, width: 40 }}></th>
-                  <th style={th}>Nome</th>
-                  <th style={th}>Cargo</th>
-                  <th style={{ ...th, textAlign: "right" }}>Salário</th>
-                  <th style={th}>Admissão</th>
-                  <th style={th}>Situação</th>
-                </tr>
-              </thead>
-              <tbody>
-                {itens.map((it, i) => (
-                  <tr key={i} style={{ background: i % 2 === 0 ? "#0F172A" : "#0D1527", cursor: "pointer", opacity: it.sel ? 1 : 0.5 }} onClick={() => alternar(i)}>
-                    <td style={{ ...td, textAlign: "center" }}><input type="checkbox" checked={it.sel} readOnly /></td>
-                    <td style={{ ...td, fontWeight: 700, color: "#F1F5F9" }}>{String(it.orig.name || it.orig.nome).toUpperCase()}</td>
-                    <td style={td}>{it.orig.cargo || "—"}</td>
-                    <td style={{ ...td, textAlign: "right", color: "#3B82F6" }}>{fmtBRL(it.orig.salario)}</td>
-                    <td style={td}>{fmtData(it.orig.admissao)}</td>
-                    <td style={{ ...td, color: it.duplicado ? "#F59E0B" : "#10B981", fontSize: 12 }}>
-                      {it.duplicado ? "⚠️ Já cadastrado" : "🆕 Novo"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
-            <button
-              style={{ ...btn, background: "#10B981", opacity: gravando || selecionados.length === 0 ? 0.5 : 1 }}
-              onClick={importar}
-              disabled={gravando || selecionados.length === 0}
-            >
-              {gravando ? "Importando..." : `✅ Importar ${selecionados.length} funcionário(s)`}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Indicador({ titulo, valor, cor }) {
-  return (
-    <div style={{ background: "#0F172A", border: `1px solid ${cor}55`, borderRadius: 12, padding: 14, textAlign: "center" }}>
-      <div style={{ fontSize: 10, color: "#94A3B8", textTransform: "uppercase" }}>{titulo}</div>
-      <div style={{ fontWeight: 900, color: cor, fontSize: 20, marginTop: 4 }}>{valor}</div>
-    </div>
-  );
-}
-
-/* ══════ ESTILOS (mesmo visual do CaixaFácil) ══════ */
 const card = { background: "#0F172A", border: "1px solid #1E293B", borderRadius: 14, padding: 20 };
-const cardTitle = { fontSize: 15, fontWeight: 700, color: "#F1F5F9", marginBottom: 18, marginTop: 0 };
-const labelStyle = { display: "block", fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 5, textTransform: "uppercase", letterSpacing: 0.5 };
-const inputStyle = { width: "100%", background: "#1E293B", border: "1px solid #334155", borderRadius: 8, padding: "10px 12px", color: "#F1F5F9", fontSize: 14, outline: "none", boxSizing: "border-box" };
-const btn = { padding: "10px 20px", border: "none", borderRadius: 8, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" };
-const miniBtn = { padding: "5px 9px", border: "none", borderRadius: 7, color: "#fff", cursor: "pointer", fontSize: 12 };
-const th = { background: "#1E293B", padding: "11px 12px", fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.4, textAlign: "left", borderBottom: "1px solid #334155" };
-const td = { padding: "10px 12px", fontSize: 13, color: "#E2E8F0", borderBottom: "1px solid #1E293B", verticalAlign: "top" };
 const alertaErro = { background: "#450a0a", border: "1px solid #EF444455", color: "#FCA5A5", borderRadius: 8, padding: "10px 12px", fontSize: 13 };
-const alertaOk = { background: "#052e16", border: "1px solid #10B98155", color: "#6EE7B7", borderRadius: 8, padding: "10px 12px", fontSize: 13 };
 const unidadePill = { fontSize: 12, color: "#F97316", background: "#F9731622", border: "1px solid #F9731555", borderRadius: 8, padding: "5px 10px", fontWeight: 700 };
-const inativoPill = { marginLeft: 8, fontSize: 9, background: "#33415588", color: "#94A3B8", borderRadius: 8, padding: "1px 6px", verticalAlign: "middle" };
-const subBase = { padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "1px solid #334155" };
-const subAtiva = { ...subBase, background: "#10B98122", color: "#10B981", borderColor: "#10B98166" };
-const subInativa = { ...subBase, background: "transparent", color: "#94A3B8" };
-const subEmBreve = { ...subBase, background: "transparent", color: "#475569", cursor: "not-allowed", borderStyle: "dashed" };
+const selectStyle = { background: "#1E293B", border: "1px solid #334155", borderRadius: 8, padding: "7px 10px", color: "#F1F5F9", fontSize: 13 };
+const linkTelaCheia = { fontSize: 12, color: "#94A3B8", border: "1px solid #334155", borderRadius: 8, padding: "6px 12px", textDecoration: "none", fontWeight: 600 };
