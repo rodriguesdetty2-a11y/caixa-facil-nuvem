@@ -169,6 +169,7 @@ function FuncionariosTela({ unidade, currentUser }) {
   const [editId, setEditId] = useState(null);
   const [busca, setBusca] = useState("");
   const [filtro, setFiltro] = useState("ativos"); // ativos | inativos | todos
+  const [mostrarImport, setMostrarImport] = useState(false);
 
   const avisar = (msg) => {
     setSucesso(msg);
@@ -292,6 +293,22 @@ function FuncionariosTela({ unidade, currentUser }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {currentUser?.admin && !mostrarImport && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button style={{ ...btn, background: "#EA580C" }} onClick={() => setMostrarImport(true)}>
+            📥 Importar funcionários do sistema antigo
+          </button>
+        </div>
+      )}
+      {mostrarImport && (
+        <ImportarAntigo
+          unidade={unidade}
+          existentes={lista}
+          onFechar={() => setMostrarImport(false)}
+          onImportado={(qtd) => { setMostrarImport(false); avisar(`✅ ${qtd} funcionário(s) importado(s)!`); recarregar(); }}
+        />
+      )}
+
       {/* FORMULÁRIO */}
       <div style={{ ...card, borderColor: editId ? "#3B82F6" : "#1E293B" }}>
         <h2 style={cardTitle}>{editId ? "✏️ Editando funcionário" : "➕ Novo funcionário"}</h2>
@@ -411,6 +428,195 @@ function FuncionariosTela({ unidade, currentUser }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
+   IMPORTAR FUNCIONÁRIOS DO SISTEMA ANTIGO
+   (backup .json do "Controle de Folha e Recibos")
+══════════════════════════════════════ */
+
+// Procura a lista de funcionários em qualquer formato de backup do sistema antigo
+function acharEmployees(obj, prof = 0) {
+  if (!obj || typeof obj !== "object" || prof > 4) return null;
+  if (Array.isArray(obj.employees)) return obj.employees;
+  for (const k of ["data", "state", "backup", "dados"]) {
+    const r = acharEmployees(obj[k], prof + 1);
+    if (r) return r;
+  }
+  return null;
+}
+
+const normNome = (s) =>
+  String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+const soDigitos = (s) => String(s || "").replace(/\D/g, "");
+
+function ImportarAntigo({ unidade, existentes, onFechar, onImportado }) {
+  const [itens, setItens] = useState(null); // [{ orig, sel, duplicado }]
+  const [arquivo, setArquivo] = useState("");
+  const [comFotos, setComFotos] = useState(true);
+  const [erro, setErro] = useState("");
+  const [gravando, setGravando] = useState(false);
+
+  const lerArquivo = (ev) => {
+    setErro(""); setItens(null);
+    const f = ev.target.files?.[0];
+    if (!f) return;
+    setArquivo(f.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const json = JSON.parse(reader.result);
+        const emps = acharEmployees(json);
+        if (!emps) { setErro("Não encontrei funcionários nesse arquivo. Confira se é o backup do sistema de Folha antigo."); return; }
+        if (emps.length === 0) { setErro("O backup não tem nenhum funcionário."); return; }
+        const nomesExist = new Set(existentes.map((e) => normNome(e.nome)));
+        const cpfsExist = new Set(existentes.map((e) => soDigitos(e.cpf)).filter((c) => c.length === 11));
+        const lista = emps
+          .filter((e) => (e.name || e.nome || "").trim())
+          .map((e) => {
+            const nome = e.name || e.nome;
+            const cpf = soDigitos(e.cpf);
+            const duplicado = nomesExist.has(normNome(nome)) || (cpf.length === 11 && cpfsExist.has(cpf));
+            return { orig: e, sel: !duplicado, duplicado };
+          })
+          .sort((a, b) => normNome(a.orig.name || a.orig.nome).localeCompare(normNome(b.orig.name || b.orig.nome)));
+        setItens(lista);
+      } catch {
+        setErro("Arquivo inválido. Escolha o arquivo .json do backup.");
+      }
+    };
+    reader.readAsText(f);
+  };
+
+  const alternar = (i) => setItens(itens.map((it, j) => (j === i ? { ...it, sel: !it.sel } : it)));
+  const marcarTodos = (v) => setItens(itens.map((it) => ({ ...it, sel: v && !it.duplicado ? true : v ? it.sel : false })));
+
+  const selecionados = (itens || []).filter((it) => it.sel);
+
+  const importar = async () => {
+    if (selecionados.length === 0) return;
+    if (!confirm(`Importar ${selecionados.length} funcionário(s) para ${unidade.nome}?`)) return;
+    setGravando(true); setErro("");
+
+    const montar = (e, comLegado) => {
+      const r = {
+        unidade_id: unidade.id,
+        nome: String(e.name || e.nome).trim().toUpperCase(),
+        cpf: e.cpf ? formatCPF(e.cpf) || String(e.cpf) : null,
+        telefone: e.phone || e.telefone || null,
+        cargo: e.cargo || null,
+        data_admissao: /^\d{4}-\d{2}-\d{2}/.test(e.admissao || "") ? String(e.admissao).slice(0, 10) : null,
+        salario: Number(e.salario) || 0,
+        observacoes: e.obs || e.observacoes || null,
+        foto_base64: comFotos && e.foto ? e.foto : null,
+        ativo: e.ativo === false ? false : true,
+      };
+      if (comLegado && e.id) r.legado_id = String(e.id);
+      return r;
+    };
+
+    // Grava em lotes de 10 (fotos podem deixar o envio pesado)
+    const enviar = async (comLegado) => {
+      let total = 0;
+      for (let i = 0; i < selecionados.length; i += 10) {
+        const lote = selecionados.slice(i, i + 10).map((it) => montar(it.orig, comLegado));
+        const { error } = await supabase.from("folha_funcionarios").insert(lote);
+        if (error) return { error, total };
+        total += lote.length;
+      }
+      return { total };
+    };
+
+    let res = await enviar(true);
+    // Se a coluna legado_id ainda não existir no Supabase, tenta sem ela
+    if (res.error && res.total === 0 && /legado_id/i.test(res.error.message || "")) {
+      res = await enviar(false);
+      if (!res.error) alert("⚠️ Importado, mas sem o código de ligação com o sistema antigo.\nRode o SQL da coluna legado_id antes da Fase 2 (importação das saídas).");
+    }
+    setGravando(false);
+    if (res.error) {
+      setErro(`Erro ao gravar (${res.total} já tinham sido importados): ${res.error.message}`);
+      return;
+    }
+    onImportado(res.total);
+  };
+
+  return (
+    <div style={{ ...card, borderColor: "#EA580C" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10 }}>
+        <h2 style={{ ...cardTitle, marginBottom: 0 }}>📥 Importar do sistema antigo → {unidade.nome}</h2>
+        <button style={{ ...btn, background: "#374151", padding: "6px 12px" }} onClick={onFechar} disabled={gravando}>✕ Fechar</button>
+      </div>
+
+      <div style={{ fontSize: 13, color: "#94A3B8", marginBottom: 12, lineHeight: 1.5 }}>
+        No sistema antigo (FUNCIONARIOS.html) clique em <strong style={{ color: "#F1F5F9" }}>Backup</strong> e escolha aqui o arquivo <strong style={{ color: "#F1F5F9" }}>.json</strong> que ele baixou.
+        Nada é gravado antes de você conferir a lista e confirmar.
+      </div>
+
+      <label style={{ ...btn, background: "#1E293B", border: "1px dashed #EA580C", display: "inline-block", color: "#FDBA74" }}>
+        📂 {arquivo ? `Arquivo: ${arquivo} (trocar)` : "Escolher arquivo de backup"}
+        <input type="file" accept=".json,application/json" onChange={lerArquivo} style={{ display: "none" }} />
+      </label>
+
+      {erro && <div style={{ ...alertaErro, marginTop: 12 }}>⚠️ {erro}</div>}
+
+      {itens && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10, fontSize: 13 }}>
+            <span style={{ color: "#F1F5F9" }}><strong>{itens.length}</strong> no backup</span>
+            <span style={{ color: "#10B981" }}><strong>{selecionados.length}</strong> marcados</span>
+            {itens.some((i) => i.duplicado) && (
+              <span style={{ color: "#F59E0B" }}><strong>{itens.filter((i) => i.duplicado).length}</strong> já cadastrados (desmarcados)</span>
+            )}
+            <button style={{ ...miniBtn, background: "#334155" }} onClick={() => marcarTodos(true)}>Marcar novos</button>
+            <button style={{ ...miniBtn, background: "#334155" }} onClick={() => marcarTodos(false)}>Desmarcar todos</button>
+            <label style={{ color: "#94A3B8", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <input type="checkbox" checked={comFotos} onChange={(e) => setComFotos(e.target.checked)} /> Importar fotos
+            </label>
+          </div>
+
+          <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto", border: "1px solid #1E293B", borderRadius: 10 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, width: 40 }}></th>
+                  <th style={th}>Nome</th>
+                  <th style={th}>Cargo</th>
+                  <th style={{ ...th, textAlign: "right" }}>Salário</th>
+                  <th style={th}>Admissão</th>
+                  <th style={th}>Situação</th>
+                </tr>
+              </thead>
+              <tbody>
+                {itens.map((it, i) => (
+                  <tr key={i} style={{ background: i % 2 === 0 ? "#0F172A" : "#0D1527", cursor: "pointer", opacity: it.sel ? 1 : 0.5 }} onClick={() => alternar(i)}>
+                    <td style={{ ...td, textAlign: "center" }}><input type="checkbox" checked={it.sel} readOnly /></td>
+                    <td style={{ ...td, fontWeight: 700, color: "#F1F5F9" }}>{String(it.orig.name || it.orig.nome).toUpperCase()}</td>
+                    <td style={td}>{it.orig.cargo || "—"}</td>
+                    <td style={{ ...td, textAlign: "right", color: "#3B82F6" }}>{fmtBRL(it.orig.salario)}</td>
+                    <td style={td}>{fmtData(it.orig.admissao)}</td>
+                    <td style={{ ...td, color: it.duplicado ? "#F59E0B" : "#10B981", fontSize: 12 }}>
+                      {it.duplicado ? "⚠️ Já cadastrado" : "🆕 Novo"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+            <button
+              style={{ ...btn, background: "#10B981", opacity: gravando || selecionados.length === 0 ? 0.5 : 1 }}
+              onClick={importar}
+              disabled={gravando || selecionados.length === 0}
+            >
+              {gravando ? "Importando..." : `✅ Importar ${selecionados.length} funcionário(s)`}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
