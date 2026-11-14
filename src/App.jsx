@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { supabase, isSupabaseReady } from "./supabase";
 import {
   carregarUsuarioLogado,
@@ -14,6 +14,8 @@ import {
 } from "./auth";
 import FolhaModulo from "./Folha";
 import RecibosTab from "./Recibos";
+import RelatorioVendedores from "./RelatorioVendedores";
+import AbastecimentoTab, { contarAlertasAbastecimento } from "./Abastecimento";
 
 /* ══════════════════════════════════════
    SINCRONIZAÇÃO COM A NUVEM
@@ -186,6 +188,30 @@ const parse = (v) => {
 };
 
 const sumList = (list) => (list || [""]).reduce((s, v) => s + parse(v), 0);
+const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+/* Prestação SEMPRE recalculada contra a entrada atual.
+   (Antes a diferença ficava "congelada" no momento da conferência; se a entrada
+   fosse corrigida depois, a diferença e o saldo ficavam errados.) */
+function recalcPrestacao(v) {
+  const p = v?.prestacao;
+  if (!p) return p;
+  const esperado = r2(v.total);
+  const entregue = r2(p.totalEntregue);
+  const dif = r2(entregue - esperado);
+  const status = Math.abs(dif) < 0.01 ? "ok" : dif > 0 ? "sobrou" : "faltou";
+  if (p.totalEsperado === esperado && p.diferenca === dif && p.status === status) return p;
+  return { ...p, totalEsperado: esperado, diferenca: dif, status };
+}
+const comPrestacaoAtual = (v) => (v?.prestacao ? { ...v, prestacao: recalcPrestacao(v) } : v);
+// Registra cada mudança de saldo no cadastro (para o relatório e auditoria)
+function comMovimento(c, valor, tipo, extra = {}) {
+  const saldoApos = r2((c.saldo || 0) + valor);
+  const mov = { data: new Date().toISOString(), tipo, valor: r2(valor), saldoAntes: r2(c.saldo || 0), saldoApos, ...extra };
+  return { ...c, saldo: saldoApos, movimentos: [...(c.movimentos || []), mov].slice(-400) };
+}
+// Quanto esta prestação lançou no saldo do vendedor quando o dia foi fechado
+const difAplicada = (p) => (p && (p.status === "faltou" || p.status === "sobrou") ? r2(p.diferenca) : 0);
 const initValores = (formas) => Object.fromEntries(formas.map((pt) => [pt.key, [""]]));
 
 /* ══════════════════════════════════════
@@ -653,7 +679,7 @@ function EntradaTab({ vendedores, setVendedores, formas, cadastros }) {
       prestacao: null,
     };
     if (editId) {
-      setVendedores((prev) => prev.map((v) => (v.id === editId ? { ...entrada, prestacao: v.prestacao } : v)));
+      setVendedores((prev) => prev.map((v) => (v.id === editId ? comPrestacaoAtual({ ...entrada, prestacao: v.prestacao }) : v)));
       setEditId(null);
     } else {
       setVendedores((prev) => [...prev, entrada]);
@@ -1638,36 +1664,83 @@ function ImpressaoTab({ vendedores, formas, conferentesLista }) {
 /* ══════════════════════════════════════
    EDITAR FECHAMENTO
 ══════════════════════════════════════ */
-function EditarFechamento({ fechamento, formas, onSalvar, onCancelar }) {
-  const [vendedores, setVendedores] = useState(JSON.parse(JSON.stringify(fechamento.vendedores)));
-  const [dataEdit, setDataEdit] = useState(fechamento.dataFormatada);
+function EditarFechamento({ fechamento, formas, cadastros = [], onSalvar, onCancelar }) {
+  // Cópia de trabalho: valores de entrada e de prestação viram texto editável
+  const [vendedores, setVendedores] = useState(() =>
+    JSON.parse(JSON.stringify(fechamento.vendedores)).map((v) => ({
+      ...v,
+      _entrada: Object.fromEntries(formas.map((pt) => [pt.key, v.valores?.[pt.key] ? String(v.valores[pt.key]) : ""])),
+      _entregue: v.prestacao ? Object.fromEntries(formas.map((pt) => [pt.key, v.prestacao.porForma?.[pt.key] ? String(v.prestacao.porForma[pt.key]) : ""])) : null,
+    }))
+  );
+  const [removidos, setRemovidos] = useState([]);
 
-  const atualizarValorVendedor = (vidx, chave, valor) => {
-    setVendedores((prev) => {
-      const novo = JSON.parse(JSON.stringify(prev));
-      novo[vidx].valores[chave] = valor;
-      novo[vidx].total = formas.reduce((s, pt) => s + parse(novo[vidx].valores[pt.key] || 0), 0);
-      return novo;
-    });
-  };
+  const setCampo = (vidx, tipo, chave, valor) =>
+    setVendedores((prev) => prev.map((v, i) => (i === vidx ? { ...v, [tipo]: { ...v[tipo], [chave]: valor } } : v)));
 
   const removerVendedor = (vidx) => {
-    if (confirm("Remover este vendedor do fechamento?"))
-      setVendedores((prev) => prev.filter((_, i) => i !== vidx));
+    if (!confirm("Remover este vendedor do fechamento?")) return;
+    setRemovidos((r) => [...r, vendedores[vidx]]);
+    setVendedores((prev) => prev.filter((_, i) => i !== vidx));
   };
+
+  // Monta o vendedor final (valores numéricos + prestação recalculada)
+  const montar = (v) => {
+    const valores = Object.fromEntries(formas.map((pt) => [pt.key, r2(parse(v._entrada[pt.key] || 0))]));
+    const total = r2(formas.reduce((s, pt) => s + valores[pt.key], 0));
+    let prestacao = v.prestacao;
+    if (v._entregue) {
+      const porForma = Object.fromEntries(formas.map((pt) => [pt.key, r2(parse(v._entregue[pt.key] || 0))]));
+      const totalEntregue = r2(formas.reduce((s, pt) => s + porForma[pt.key], 0));
+      prestacao = { ...v.prestacao, porForma, totalEntregue };
+    }
+    const { _entrada, _entregue, ...resto } = v;
+    return comPrestacaoAtual({ ...resto, valores, total, prestacao });
+  };
+
+  const finais = vendedores.map(montar);
+
+  // Ajuste de saldo = (diferença nova) − (diferença que já tinha sido lançada no saldo)
+  const ajustes = {};
+  const linhasAjuste = [];
+  fechamento.vendedores.forEach((orig) => {
+    const atual = finais.find((f) => f.id === orig.id);
+    const antes = difAplicada(orig.prestacao);
+    const depois = atual ? difAplicada(atual.prestacao) : 0;
+    const delta = r2(depois - antes);
+    if (Math.abs(delta) >= 0.01) {
+      const k = orig.nome.trim().toLowerCase();
+      ajustes[k] = r2((ajustes[k] || 0) + delta);
+    }
+  });
+  Object.entries(ajustes).forEach(([k, d]) => {
+    if (Math.abs(d) < 0.01) return;
+    const c = cadastros.find((x) => x.nome.trim().toLowerCase() === k);
+    linhasAjuste.push({ nome: c?.nome || k.toUpperCase(), delta: d, saldoAtual: c?.saldo || 0, temCadastro: !!c });
+  });
 
   const salvar = () => {
     const totalPorForma = {};
     const entreguePorForma = {};
     formas.forEach((pt) => {
-      totalPorForma[pt.key] = vendedores.reduce((s, v) => s + parse(v.valores[pt.key] || 0), 0);
-      entreguePorForma[pt.key] = vendedores.filter((v) => v.prestacao).reduce((s, v) => s + (v.prestacao?.porForma?.[pt.key] || 0), 0);
+      totalPorForma[pt.key] = r2(finais.reduce((s, v) => s + (v.valores[pt.key] || 0), 0));
+      entreguePorForma[pt.key] = r2(finais.filter((v) => v.prestacao).reduce((s, v) => s + (v.prestacao.porForma?.[pt.key] || 0), 0));
     });
-    const comPrestacao = vendedores.filter((v) => v.prestacao);
-    const totalEsperado = vendedores.reduce((s, v) => s + v.total, 0);
-    const totalEntregue = comPrestacao.reduce((s, v) => s + (v.prestacao?.totalEntregue || 0), 0);
-    onSalvar({ ...fechamento, vendedores, totalEsperado, totalEntregue, totalPorForma, entreguePorForma });
+    const totalEsperado = r2(finais.reduce((s, v) => s + v.total, 0));
+    const totalEntregue = r2(finais.filter((v) => v.prestacao).reduce((s, v) => s + (v.prestacao.totalEntregue || 0), 0));
+
+    if (linhasAjuste.length > 0) {
+      const txt = linhasAjuste.map((l) =>
+        `• ${l.nome}: saldo ${fmt(l.saldoAtual)} → ${fmt(r2(l.saldoAtual + l.delta))}  (${l.delta > 0 ? "+" : ""}${fmt(l.delta)})${l.temCadastro ? "" : "  [sem cadastro — não será alterado]"}`
+      ).join("\n");
+      if (!confirm(`Salvar o fechamento e AJUSTAR OS SALDOS abaixo?\n\n${txt}`)) return;
+    }
+    onSalvar({ ...fechamento, vendedores: finais, totalEsperado, totalEntregue, totalPorForma, entreguePorForma }, ajustes);
   };
+
+  const totalEsp = finais.reduce((s, v) => s + v.total, 0);
+  const totalEnt = finais.filter((v) => v.prestacao).reduce((s, v) => s + (v.prestacao.totalEntregue || 0), 0);
+  const corDif = (d) => (Math.abs(d) < 0.01 ? "#10B981" : d > 0 ? "#3B82F6" : "#EF4444");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -1680,56 +1753,86 @@ function EditarFechamento({ fechamento, formas, onSalvar, onCancelar }) {
       <div style={card}>
         <h2 style={cardTitle}>✏️ Editar Fechamento</h2>
         <div style={{ fontSize: 12, color: "#F59E0B", background: "#451A0320", border: "1px solid #F59E0B44", borderRadius: 8, padding: "10px 14px", marginBottom: 20 }}>
-          ⚠️ Você está editando um fechamento salvo. Altere os valores com cuidado.
+          ⚠️ Você está editando um fechamento salvo. Dá para corrigir a <b>ENTRADA</b> e a <b>PRESTAÇÃO</b>.
+          Ao salvar, o saldo do vendedor é ajustado automaticamente pela diferença corrigida.
         </div>
+
+        {linhasAjuste.length > 0 && (
+          <div style={{ fontSize: 13, color: "#BFDBFE", background: "#1E3A8A33", border: "1px solid #3B82F655", borderRadius: 8, padding: "10px 14px", marginBottom: 16 }}>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>⚖️ Ao salvar, os saldos serão ajustados:</div>
+            {linhasAjuste.map((l) => (
+              <div key={l.nome}>
+                • <b>{l.nome}</b>: {fmt(l.saldoAtual)} → <b>{fmt(r2(l.saldoAtual + l.delta))}</b>{" "}
+                <span style={{ color: corDif(l.delta) }}>({l.delta > 0 ? "+" : ""}{fmt(l.delta)})</span>
+                {!l.temCadastro && <span style={{ color: "#FCA5A5" }}> — sem cadastro, não será alterado</span>}
+              </div>
+            ))}
+          </div>
+        )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {vendedores.map((v, vidx) => {
-            const p = v.prestacao;
-            const cor = !p ? "#64748B" : p.status === "ok" ? "#10B981" : p.status === "sobrou" ? "#3B82F6" : "#EF4444";
+            const f = finais[vidx];
+            const p = f.prestacao;
+            const original = fechamento.vendedores.find((o) => o.id === v.id);
+            const difAntiga = original?.prestacao ? r2(original.prestacao.diferenca) : null;
+            const mudou = p && difAntiga !== null && Math.abs(difAntiga - p.diferenca) >= 0.01;
             return (
-              <div key={v.id} style={{ background: "#1E293B", border: "1px solid #334155", borderRadius: 12, padding: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-                  <div style={{ fontWeight: 700, color: "#F1F5F9", fontSize: 14 }}>👤 {v.nome}</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    {p && (
-                      <span style={{ fontSize: 11, fontWeight: 700, color: cor, background: cor + "22", border: `1px solid ${cor}55`, borderRadius: 20, padding: "2px 10px" }}>
-                        {p.status === "ok" ? "✅ OK" : p.status === "sobrou" ? "📈 Sobrou" : "⚠️ Faltou"}
-                      </span>
-                    )}
-                    <button style={{ ...miniBtn, background: "#DC2626" }} onClick={() => removerVendedor(vidx)}>🗑️ Remover</button>
-                  </div>
+              <div key={v.id} style={{ background: "#1E293B", border: `1px solid ${mudou ? "#F59E0B88" : "#334155"}`, borderRadius: 12, padding: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 800, color: "#F1F5F9", fontSize: 15 }}>👤 {v.nome}</div>
+                  <button style={{ ...miniBtn, background: "#DC2626" }} onClick={() => removerVendedor(vidx)}>🗑️ Remover</button>
                 </div>
 
-                {/* Editar valores por forma */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#60A5FA", marginBottom: 6 }}>📥 ENTRADA (esperado)</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 8 }}>
                   {formas.map((pt) => (
                     <div key={pt.key}>
-                      <label style={{ ...labelStyle, color: pt.color }}>{pt.icon} {pt.label}</label>
-                      <input
-                        style={{ ...inputStyle, borderColor: pt.color + "66", textAlign: "right", fontSize: 13, padding: "7px 10px" }}
-                        type="number" step="0.01" min="0" placeholder="0,00"
-                        value={v.valores[pt.key] || ""}
-                        onChange={(e) => atualizarValorVendedor(vidx, pt.key, e.target.value)}
-                      />
+                      <label style={{ ...labelStyle, color: pt.color, fontSize: 10 }}>{pt.icon} {pt.label}</label>
+                      <input style={{ ...inputStyle, borderColor: pt.color + "66", textAlign: "right", fontSize: 13, padding: "6px 9px" }}
+                        inputMode="decimal" placeholder="0,00" value={v._entrada[pt.key]}
+                        onChange={(e) => setCampo(vidx, "_entrada", pt.key, e.target.value)} />
                     </div>
                   ))}
                 </div>
 
-                <div style={{ marginTop: 10, textAlign: "right", fontSize: 13, color: "#10B981", fontWeight: 700 }}>
-                  Total: {fmt(v.total)}
+                {v._entregue ? (
+                  <>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: "#34D399", margin: "14px 0 6px" }}>📤 PRESTAÇÃO (entregue)</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 8 }}>
+                      {formas.map((pt) => (
+                        <div key={pt.key}>
+                          <label style={{ ...labelStyle, color: pt.color, fontSize: 10 }}>{pt.icon} {pt.label}</label>
+                          <input style={{ ...inputStyle, borderColor: "#10B98166", background: "#0B2A22", textAlign: "right", fontSize: 13, padding: "6px 9px" }}
+                            inputMode="decimal" placeholder="0,00" value={v._entregue[pt.key]}
+                            onChange={(e) => setCampo(vidx, "_entregue", pt.key, e.target.value)} />
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ marginTop: 10, fontSize: 12, color: "#94A3B8" }}>⏳ Sem prestação neste dia.</div>
+                )}
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 18, marginTop: 12, flexWrap: "wrap", fontSize: 13 }}>
+                  <span style={{ color: "#60A5FA" }}>Esperado: <b>{fmt(f.total)}</b></span>
+                  {p && <span style={{ color: "#34D399" }}>Entregue: <b>{fmt(p.totalEntregue)}</b></span>}
+                  {p && (
+                    <span style={{ color: corDif(p.diferenca), fontWeight: 800 }}>
+                      Diferença: {p.diferenca > 0 ? "+" : ""}{fmt(p.diferenca)}
+                      {mudou && <span style={{ color: "#F59E0B", fontWeight: 600 }}> (antes {difAntiga > 0 ? "+" : ""}{fmt(difAntiga)})</span>}
+                    </span>
+                  )}
                 </div>
               </div>
             );
           })}
         </div>
 
-        {/* Total geral editado */}
-        <div style={{ marginTop: 16, background: "#0F172A", border: "1px solid #334155", borderRadius: 10, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ color: "#94A3B8", fontWeight: 700 }}>Total Geral após edição:</span>
-          <span style={{ color: "#10B981", fontWeight: 900, fontSize: 18 }}>
-            {fmt(vendedores.reduce((s, v) => s + v.total, 0))}
-          </span>
+        <div style={{ marginTop: 16, background: "#0F172A", border: "1px solid #334155", borderRadius: 10, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ color: "#60A5FA" }}>Esperado: <b>{fmt(totalEsp)}</b></span>
+          <span style={{ color: "#34D399" }}>Entregue: <b>{fmt(totalEnt)}</b></span>
+          <span style={{ color: corDif(totalEnt - totalEsp), fontWeight: 900, fontSize: 16 }}>Diferença do dia: {totalEnt - totalEsp > 0 ? "+" : ""}{fmt(totalEnt - totalEsp)}</span>
         </div>
 
         <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
@@ -1744,7 +1847,7 @@ function EditarFechamento({ fechamento, formas, onSalvar, onCancelar }) {
 /* ══════════════════════════════════════
    ABA CADASTRO DE VENDEDORES
 ══════════════════════════════════════ */
-function CadastroVendedoresTab({ cadastros, setCadastros }) {
+function CadastroVendedoresTab({ cadastros, setCadastros, currentUser, abrirRelatorio }) {
   const [nome, setNome] = useState("");
   const [telefone, setTelefone] = useState("");
   const [saldoInicial, setSaldoInicial] = useState("");
@@ -1774,7 +1877,14 @@ function CadastroVendedoresTab({ cadastros, setCadastros }) {
   const remover = (id) => { if (confirm("Remover este vendedor do cadastro?")) setCadastros((prev) => prev.filter((c) => c.id !== id)); };
 
   const salvarSaldo = (id) => {
-    setCadastros((prev) => prev.map((c) => c.id === id ? { ...c, saldo: parse(novoSaldo) } : c));
+    const c0 = cadastros.find((c) => c.id === id);
+    const novo = r2(parse(novoSaldo));
+    const delta = r2(novo - (c0?.saldo || 0));
+    if (Math.abs(delta) >= 0.01) {
+      const motivo = prompt(`Ajuste de saldo de ${c0?.nome}: ${fmt(c0?.saldo || 0)} → ${fmt(novo)}\n\nMotivo do ajuste (aparece no relatório):`, "");
+      if (motivo === null) return; // cancelou
+      setCadastros((prev) => prev.map((c) => c.id === id ? comMovimento(c, delta, "ajuste_manual", { por: currentUser?.nome || "", obs: motivo.trim() }) : c));
+    }
     setEditandoSaldo(null);
     setNovoSaldo("");
   };
@@ -1857,6 +1967,7 @@ function CadastroVendedoresTab({ cadastros, setCadastros }) {
                           {saldoNeg ? "⚠️ Deve" : saldoPos ? "📈 A receber" : ""}
                         </div>
                       </div>
+                      {abrirRelatorio && <button style={{ ...miniBtn, background: "#7C3AED" }} title="Relatório de sobras e faltas" onClick={() => abrirRelatorio(c.nome)}>📊</button>}
                       <button style={{ ...miniBtn, background: "#2563EB" }} onClick={() => editar(c)}>✏️</button>
                       <button style={{ ...miniBtn, background: "#DC2626" }} onClick={() => remover(c.id)}>🗑️</button>
                     </div>
@@ -2879,7 +2990,19 @@ export default function App() {
   const [cadastros, setCadastros, cadastrosLoaded] = useCloudState("cadastros", []);
   const [empresas, setEmpresas, empresasLoaded] = useCloudState("empresas", []);
   const [recibos, setRecibos, recibosLoaded] = useCloudState("recibos", []);
-  const allLoaded = formasLoaded && vendedoresLoaded && historicoLoaded && cadastrosLoaded && empresasLoaded && recibosLoaded;
+  const [motos, setMotos, motosLoaded] = useCloudState("motos", []);
+  const [abastecimentos, setAbastecimentos, abastecimentosLoaded] = useCloudState("abastecimentos", []);
+  const [abastConfig, setAbastConfig, abastConfigLoaded] = useCloudState("abastecimento_config", {});
+  const [vendedorRelatorio, setVendedorRelatorio] = useState("");
+  const allLoaded = formasLoaded && vendedoresLoaded && historicoLoaded && cadastrosLoaded && empresasLoaded && recibosLoaded && motosLoaded && abastecimentosLoaded && abastConfigLoaded;
+
+  // Diferenças sempre recalculadas (entrada atual x valor entregue)
+  const vendedoresAtual = useMemo(() => (vendedores || []).map(comPrestacaoAtual), [vendedores]);
+  const alertasAbast = useMemo(() => contarAlertasAbastecimento(motos || [], abastecimentos || [], abastConfig || {}), [motos, abastecimentos, abastConfig]);
+  const historicoAtual = useMemo(
+    () => (historico || []).map((f) => ({ ...f, vendedores: (f.vendedores || []).map(comPrestacaoAtual) })),
+    [historico]
+  );
   const nuvem = isSupabaseReady();
 
   const totalGeral = vendedores.reduce((s, v) => s + v.total, 0);
@@ -2906,21 +3029,22 @@ export default function App() {
     if (!confirm("Fechar o dia e salvar no histórico? Os vendedores atuais serão arquivados.")) return;
 
     const agora = new Date();
+    const vendedoresFech = vendedores.map(comPrestacaoAtual);
     const totalPorForma = {};
     const entreguePorForma = {};
     formas.forEach((pt) => {
-      totalPorForma[pt.key] = vendedores.reduce((s, v) => s + (v.valores[pt.key] || 0), 0);
-      entreguePorForma[pt.key] = vendedores.filter((v) => v.prestacao).reduce((s, v) => s + (v.prestacao.porForma?.[pt.key] || 0), 0);
+      totalPorForma[pt.key] = vendedoresFech.reduce((s, v) => s + (v.valores[pt.key] || 0), 0);
+      entreguePorForma[pt.key] = vendedoresFech.filter((v) => v.prestacao).reduce((s, v) => s + (v.prestacao.porForma?.[pt.key] || 0), 0);
     });
-    const comPrestacao = vendedores.filter((v) => v.prestacao);
-    const totalEsperado = vendedores.reduce((s, v) => s + v.total, 0);
+    const comPrestacao = vendedoresFech.filter((v) => v.prestacao);
+    const totalEsperado = vendedoresFech.reduce((s, v) => s + v.total, 0);
     const totalEntregue = comPrestacao.reduce((s, v) => s + v.prestacao.totalEntregue, 0);
     const fechamento = {
       id: Date.now(),
       timestamp: dataObj.toISOString(),
       dataFormatada: dataObj.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" }),
       horaFormatada: agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
-      vendedores: [...vendedores],
+      vendedores: [...vendedoresFech],
       totalEsperado,
       totalEntregue,
       totalPorForma,
@@ -2932,7 +3056,7 @@ export default function App() {
     // IMPORTANTE: faz UMA ÚNICA atualização com TODAS as mudanças de uma vez,
     // senão as chamadas sequenciais ao Supabase podem sobrescrever umas às outras.
     const diferencasPorNome = {};
-    vendedores.forEach((v) => {
+    vendedoresFech.forEach((v) => {
       if (v.prestacao && (v.prestacao.status === "faltou" || v.prestacao.status === "sobrou")) {
         const nomeKey = v.nome.trim().toLowerCase();
         const diferenca = v.prestacao.diferenca || 0;
@@ -2945,7 +3069,7 @@ export default function App() {
         const nomeKey = c.nome.trim().toLowerCase();
         const dif = diferencasPorNome[nomeKey];
         if (dif !== undefined) {
-          return { ...c, saldo: Math.round(((c.saldo || 0) + dif) * 100) / 100 };
+          return comMovimento(c, dif, "fechamento", { ref: fechamento.dataFormatada, fechamentoId: fechamento.id, por: currentUser?.nome || "" });
         }
         return c;
       }));
@@ -3054,6 +3178,11 @@ export default function App() {
         <button style={aba === "mensagens" ? tabActive : tabInactive} onClick={() => setAba("mensagens")}>💬 Mensagens</button>
         <button style={aba === "impressao" ? tabActive : tabInactive} onClick={() => setAba("impressao")}>🖨️ Imprimir</button>
         <button style={aba === "recibos" ? tabActive : tabInactive} onClick={() => setAba("recibos")}>🧾 Recibos</button>
+        <button style={aba === "relatorio" ? tabActive : tabInactive} onClick={() => { setVendedorRelatorio(""); setAba("relatorio"); }}>📊 Relatório</button>
+        <button style={aba === "abastecimento" ? tabActive : tabInactive} onClick={() => setAba("abastecimento")}>
+          ⛽ Abastecimento
+          {alertasAbast > 0 && <span style={{ marginLeft: 5, background: "#EF4444", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 10, padding: "1px 6px" }}>{alertasAbast}</span>}
+        </button>
         <button style={aba === "historico" ? tabActive : tabInactive} onClick={() => setAba("historico")}>
           📅 Histórico
           {historico.length > 0 && <span style={{ marginLeft: 5, background: "#7C3AED", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 10, padding: "1px 6px" }}>{historico.length}</span>}
@@ -3076,18 +3205,26 @@ export default function App() {
       </div>
 
       <div style={content}>
-        {aba === "cadastros" && <CadastroVendedoresTab cadastros={cadastros} setCadastros={setCadastros} />}
-        {aba === "entrada" && <EntradaTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} cadastros={cadastros} />}
+        {aba === "cadastros" && <CadastroVendedoresTab cadastros={cadastros} setCadastros={setCadastros} currentUser={currentUser} abrirRelatorio={(nome) => { setVendedorRelatorio(nome); setAba("relatorio"); }} />}
+        {aba === "entrada" && <EntradaTab vendedores={vendedoresAtual} setVendedores={setVendedores} formas={formas} cadastros={cadastros} />}
         {aba === "contas" && <PrestaContasTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} cadastros={cadastros} currentUser={currentUser} conferentesLista={conferentesLista} />}
         {aba === "folha" && currentUser?.admin && <FolhaModulo currentUser={currentUser} />}
+        {aba === "relatorio" && (
+          <RelatorioVendedores cadastros={cadastros} historico={historico} vendedorInicial={vendedorRelatorio}
+            onAbrirDia={(id) => { const f = historico.find((x) => x.id === id); if (f) { setFechamentoVer(f); setAba("ver_fechamento"); } }} />
+        )}
+        {aba === "abastecimento" && (
+          <AbastecimentoTab motos={motos} setMotos={setMotos} abastecimentos={abastecimentos} setAbastecimentos={setAbastecimentos}
+            config={abastConfig} setConfig={setAbastConfig} cadastros={cadastros} currentUser={currentUser} />
+        )}
         {aba === "recibos" && <RecibosTab currentUser={currentUser} empresas={empresas} setEmpresas={setEmpresas} recibos={recibos} setRecibos={setRecibos} />}
         {aba === "conferentes" && currentUser?.admin && <ConferentesTab currentUser={currentUser} onMudanca={recarregarConferentes} />}
-        {aba === "resumo" && <ResumoTab vendedores={vendedores} formas={formas} fecharDia={fecharDia} conferentesLista={conferentesLista} />}
-        {aba === "impressao" && <ImpressaoTab vendedores={vendedores} formas={formas} conferentesLista={conferentesLista} />}
-        {aba === "historico" && <HistoricoTab historico={historico} setHistorico={setHistorico} formas={formas}
+        {aba === "resumo" && <ResumoTab vendedores={vendedoresAtual} formas={formas} fecharDia={fecharDia} conferentesLista={conferentesLista} />}
+        {aba === "impressao" && <ImpressaoTab vendedores={vendedoresAtual} formas={formas} conferentesLista={conferentesLista} />}
+        {aba === "historico" && <HistoricoTab historico={historicoAtual} setHistorico={setHistorico} formas={formas}
           conferentesLista={conferentesLista}
-          abrirFechamento={(f) => { setFechamentoVer(f); setAba("ver_fechamento"); }}
-          editarFechamento={(f) => { setFechamentoVer(f); setAba("editar_fechamento"); }}
+          abrirFechamento={(f) => { setFechamentoVer(historico.find((x) => x.id === f.id) || f); setAba("ver_fechamento"); }}
+          editarFechamento={(f) => { setFechamentoVer(historico.find((x) => x.id === f.id) || f); setAba("editar_fechamento"); }}
         />}
         {aba === "ver_fechamento" && fechamentoVer && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -3097,6 +3234,12 @@ export default function App() {
             </div>
             <div style={card}>
               <h2 style={cardTitle}>📅 {fechamentoVer.dataFormatada} — {fechamentoVer.horaFormatada}</h2>
+              {fechamentoVer.vendedores.some((v) => v.prestacao && Math.abs(difAplicada(v.prestacao) - difAplicada(recalcPrestacao(v))) >= 0.01) && (
+                <div style={{ fontSize: 13, color: "#FDE68A", background: "#42200688", border: "1px solid #F59E0B66", borderRadius: 10, padding: "10px 14px", marginBottom: 16 }}>
+                  ⚠️ Neste dia, o saldo de algum vendedor foi lançado com uma diferença que não confere com a entrada e a prestação.
+                  Clique em <b>✏️ Editar este Fechamento</b>, confira os valores e clique em <b>💾 Salvar</b> — o saldo será corrigido.
+                </div>
+              )}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))", gap: 12, marginBottom: 20 }}>
                 <div style={{ background: "#1e3a5f", border: "1px solid #3B82F655", borderRadius: 12, padding: 14, textAlign: "center" }}>
                   <div style={{ fontSize: 10, color: "#94A3B8" }}>📥 ESPERADO</div>
@@ -3126,6 +3269,7 @@ export default function App() {
                     <tr>
                       <th style={th}>Vendedor</th>
                       <th style={{ ...th, textAlign: "right" }}>Total Entrada</th>
+                      <th style={{ ...th, textAlign: "right" }}>Entregue</th>
                       <th style={{ ...th, textAlign: "center" }}>Prestação</th>
                       <th style={{ ...th, textAlign: "right" }}>Diferença</th>
                       <th style={th}>🕵️ Conferido por</th>
@@ -3133,17 +3277,25 @@ export default function App() {
                   </thead>
                   <tbody>
                     {fechamentoVer.vendedores.map((v, i) => {
-                      const p = v.prestacao;
+                      const p = recalcPrestacao(v);
                       const cor = !p ? "#64748B" : p.status === "ok" ? "#10B981" : p.status === "sobrou" ? "#3B82F6" : "#EF4444";
+                      const lancadoNoSaldo = difAplicada(v.prestacao);
+                      const saldoErrado = p && Math.abs(lancadoNoSaldo - difAplicada(p)) >= 0.01;
                       return (
                         <tr key={v.id} style={{ background: i % 2 === 0 ? "#0F172A" : "#0D1527" }}>
                           <td style={{ ...td, fontWeight: 700, color: "#F1F5F9" }}>👤 {v.nome}</td>
                           <td style={{ ...td, textAlign: "right", color: "#3B82F6", fontWeight: 700 }}>{fmt(v.total)}</td>
+                          <td style={{ ...td, textAlign: "right", color: "#10B981", fontWeight: 700 }}>{p ? fmt(p.totalEntregue) : "—"}</td>
                           <td style={{ ...td, textAlign: "center", color: cor, fontWeight: 700 }}>
                             {!p ? "⏳ Pendente" : p.status === "ok" ? "✅ OK" : p.status === "sobrou" ? "📈 Sobrou" : "⚠️ Faltou"}
                           </td>
                           <td style={{ ...td, textAlign: "right", color: cor, fontWeight: 700 }}>
                             {!p ? "—" : p.status === "ok" ? "R$ 0,00" : (p.diferenca >= 0 ? "+" : "") + fmt(p.diferenca)}
+                            {saldoErrado && (
+                              <div style={{ fontSize: 10, color: "#F59E0B", fontWeight: 600, marginTop: 3 }}>
+                                ⚠️ no saldo entrou {lancadoNoSaldo >= 0 ? "+" : ""}{fmt(lancadoNoSaldo)}
+                              </div>
+                            )}
                           </td>
                           <td style={{ ...td, color: "#94A3B8", fontSize: 11 }}>
                             {nomeConferenteAtual(p?.conferente, conferentesLista) || "—"}
@@ -3162,8 +3314,15 @@ export default function App() {
           <EditarFechamento
             fechamento={fechamentoVer}
             formas={formas}
-            onSalvar={(fechamentoEditado) => {
+            cadastros={cadastros}
+            onSalvar={(fechamentoEditado, ajustesSaldo) => {
               setHistorico((prev) => prev.map((f) => f.id === fechamentoEditado.id ? fechamentoEditado : f));
+              if (ajustesSaldo && Object.keys(ajustesSaldo).length > 0) {
+                setCadastros((prev) => prev.map((c) => {
+                  const d = ajustesSaldo[c.nome.trim().toLowerCase()];
+                  return d ? comMovimento(c, d, "correcao_fechamento", { ref: fechamentoEditado.dataFormatada, fechamentoId: fechamentoEditado.id, por: currentUser?.nome || "", obs: "Correção do fechamento de " + fechamentoEditado.dataFormatada }) : c;
+                }));
+              }
               setFechamentoVer(fechamentoEditado);
               setAba("ver_fechamento");
               alert("✅ Fechamento atualizado com sucesso!");
@@ -3171,12 +3330,12 @@ export default function App() {
             onCancelar={() => setAba("ver_fechamento")}
           />
         )}
-        {aba === "mensagens" && <MensagensTab cadastros={cadastros} vendedores={vendedores} currentUser={currentUser} />}
+        {aba === "mensagens" && <MensagensTab cadastros={cadastros} vendedores={vendedoresAtual} currentUser={currentUser} />}
         {aba === "config" && currentUser?.admin && <ConfigTab formas={formas} setFormas={setFormas} />}
         {aba === "calculadora" && <CalculadoraTab />}
         {aba === "backup" && currentUser?.admin && (
           <BackupTab
-            dados={{ vendedores, historico, cadastros, formas, empresas, recibos }}
+            dados={{ vendedores, historico, cadastros, formas, empresas, recibos, motos, abastecimentos, abastecimento_config: abastConfig }}
             onImportar={(dados) => {
               if (dados.vendedores) setVendedores(dados.vendedores);
               if (dados.historico) setHistorico(dados.historico);
@@ -3184,6 +3343,9 @@ export default function App() {
               if (dados.formas) setFormas(dados.formas);
               if (dados.empresas) setEmpresas(dados.empresas);
               if (dados.recibos) setRecibos(dados.recibos);
+              if (dados.motos) setMotos(dados.motos);
+              if (dados.abastecimentos) setAbastecimentos(dados.abastecimentos);
+              if (dados.abastecimento_config) setAbastConfig(dados.abastecimento_config);
               alert("✅ Backup importado com sucesso!");
               setAba("entrada");
             }}

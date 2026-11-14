@@ -293,6 +293,7 @@ const defaultState = () => ({
   comissoes: [],       // {id, employeeId, data, tipo, valor, obs, quantidade?, valorUnitario?, base?, percentual?, descricao?}
   bonificacoes: [],    // {id, employeeId, data, valor, motivo, obs}
   ferias: [],          // {id, employeeId, dataPagamento, periodoInicio, periodoFim, valorFerias, valorTerco, obs}
+  decimo: [],          // {id, employeeId, ano, parcela ('1'|'2'|'unica'), data, avos, valorBruto, adiantamento, inss, outros, outrosDesc, obs}
   cheques: [],         // {id, numero, banco, agencia, conta, valor, dataEmissao, dataVencimento, emitenteNome, emitenteCpf, motivoDevolucao, obs, status, entregas:[{id, data, tipoPessoa, employeeId?, nome, cpf, motivo, obs}], quitacao?:{data, forma, obs}}
   fechamentos: [],     // {id, mes, dataFechamento, totalSalarios, totalSaidas, totalLiquidoPago, totalGeral, empCount, snapshot}
   fard_itens: [],      // {id, nome, descricao, custo}
@@ -515,6 +516,7 @@ const ROUTES = [
   { path: '#/saidas',      title: 'Saídas / Adiantamentos', subtitle: 'Lançamentos do mês',       icon: 'arrow-up-right',   render: renderSaidas },
   { path: '#/extras',      title: 'Comissões e Bônus',  subtitle: 'Adicionais a receber',         icon: 'trending-up',      render: renderExtras },
   { path: '#/ferias',      title: 'Férias',             subtitle: 'Recibos de férias',            icon: 'sun',              render: renderFerias },
+  { path: '#/decimo',      title: 'Décimo Terceiro',    subtitle: '1ª e 2ª parcela — separado da folha', icon: 'gift',     render: renderDecimo },
   { path: '#/cheques',     title: 'Cheques',            subtitle: 'Cheques devolvidos e entregas',icon: 'file-text',        render: renderCheques },
   { path: '#/recibos',     title: 'Recibos',            subtitle: 'Pagamento, adiantamento, vale, PIX', icon: 'file-text',  render: renderRecibos },
   { path: '#/fardamentos', title: 'Fardamentos',        subtitle: 'Estoque e entregas para funcionários', icon: 'shirt',     render: renderFardamentos },
@@ -900,7 +902,7 @@ function renderDashboard() {
   let totalLiquidoPendente = 0;// líquido restante ainda a pagar
   let totalAdto = 0, totalGas = 0;
 
-  state.employees.forEach(e => {
+  empsDoMes(mes).forEach(e => {
     totalSalarios += Number(e.salario||0);
     const liq = calcLiquido(e, mes); // salário - saídas do mês
     const st = statusPagamento(e.id, mes);
@@ -922,7 +924,7 @@ function renderDashboard() {
     { label: 'Total da Folha',    value: fmtBRL(totalSalarios), icon: 'wallet',     color: 'from-brand-600 to-brand-800' },
     { label: 'Total Pago',        value: fmtBRL(totalPago),     icon: 'check-circle', color: 'from-emerald-500 to-emerald-700' },
     { label: 'Total Pendente',    value: fmtBRL(totalPendente), icon: 'clock',      color: 'from-accent-500 to-accent-600' },
-    { label: 'Funcionários',      value: state.employees.length, icon: 'users',     color: 'from-slate-600 to-slate-800' },
+    { label: 'Funcionários',      value: empsOrdenados().length, icon: 'users',     color: 'from-slate-600 to-slate-800' },
     { label: 'Adiantamentos (mês)', value: fmtBRL(totalAdto),   icon: 'hand-coins', color: 'from-sky-600 to-sky-800' },
     { label: 'Compras (mês)',     value: fmtBRL(totalGas),      icon: 'shopping-bag', color: 'from-violet-600 to-violet-800' },
   ];
@@ -978,7 +980,7 @@ function renderDashboard() {
     let totSaidasMes = 0;
     state.saidas.forEach(s => { if (monthKey(s.data) === m.key) totSaidasMes += Number(s.valor||0); });
     let totLiqPagoMes = 0;
-    state.employees.forEach(e => {
+    empsDoMes(m.key).forEach(e => {
       const liq = calcLiquido(e, m.key);
       const st = statusPagamento(e.id, m.key);
       if (st === 'pago') totLiqPagoMes += liq;
@@ -1011,8 +1013,8 @@ function renderDashboard() {
   }));
 
   /* ---- Barras (folha por funcionário) ---- */
-  const labels = state.employees.map(e => e.name.split(' ')[0]);
-  const vals   = state.employees.map(e => Number(e.salario)||0);
+  const labels = empsOrdenados().map(e => e.name.split(' ')[0]);
+  const vals   = empsOrdenados().map(e => Number(e.salario)||0);
   chartInstances.push(new Chart(document.getElementById('chartBarras'), {
     type: 'bar',
     data: { labels, datasets: [{ label: 'Salário', data: vals, backgroundColor: '#1f7d4d', borderRadius: 6 }] },
@@ -1025,11 +1027,16 @@ function getLegendColor() { return document.documentElement.classList.contains('
    PÁGINA: FUNCIONÁRIOS
    ========================================================== */
 let empFilter = '';
+let empSituacao = 'ativos';
 function renderFuncionarios() {
   const q = empFilter.toLowerCase();
-  const list = empsOrdenados().filter(e =>
-    !q || (e.name+' '+e.cargo+' '+e.cpf).toLowerCase().includes(q)
+  const qtdAtivos = state.employees.filter(e => !e.inativo).length;
+  const qtdInativos = state.employees.length - qtdAtivos;
+  const list = empsTodos().filter(e =>
+    (empSituacao === 'todos' || (empSituacao === 'inativos' ? e.inativo : !e.inativo)) &&
+    (!q || (e.name+' '+e.cargo+' '+e.cpf).toLowerCase().includes(q))
   );
+  const chip = (v, txt, n) => `<button onclick="empSituacao='${v}';renderFuncionarios()" class="px-3 py-1.5 rounded-full text-sm font-semibold border ${empSituacao===v ? 'bg-brand-700 text-white border-brand-700' : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'}">${txt} <span class="opacity-70">(${n})</span></button>`;
   document.getElementById('page').innerHTML = `
     <div class="flex flex-col sm:flex-row gap-3 mb-4">
       <div class="relative flex-1">
@@ -1041,21 +1048,25 @@ function renderFuncionarios() {
         <i data-lucide="user-plus" class="w-4 h-4"></i> Novo funcionário
       </button>
     </div>
+    <div class="flex flex-wrap gap-2 mb-4">
+      ${chip('ativos', 'Ativos', qtdAtivos)}${chip('inativos', 'Inativos', qtdInativos)}${chip('todos', 'Todos', state.employees.length)}
+    </div>
 
     <div class="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       ${list.length === 0 ? `
         <div class="col-span-full bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 rounded-2xl p-10 text-center">
           <i data-lucide="users" class="w-10 h-10 mx-auto text-slate-400"></i>
-          <p class="mt-3 text-slate-500">Nenhum funcionário cadastrado.</p>
+          <p class="mt-3 text-slate-500">${state.employees.length === 0 ? 'Nenhum funcionário cadastrado.' : empSituacao === 'inativos' ? 'Nenhum funcionário inativo.' : 'Nenhum funcionário encontrado.'}</p>
           <button onclick="empForm()" class="mt-4 px-4 py-2 rounded-lg bg-brand-700 text-white text-sm font-semibold">Cadastrar agora</button>
         </div>` : list.map(e => `
-        <div class="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-md transition">
+        <div class="bg-white dark:bg-slate-900 rounded-2xl p-5 border ${e.inativo ? 'border-dashed border-slate-300 dark:border-slate-700 opacity-60' : 'border-slate-200 dark:border-slate-800'} shadow-sm hover:shadow-md transition">
           <div class="flex items-center gap-3">
             ${e.foto ? `<img src="${e.foto}" class="w-14 h-14 rounded-full object-cover ring-2 ring-brand-200">` :
               `<div class="w-14 h-14 rounded-full bg-brand-100 dark:bg-brand-700/40 text-brand-700 dark:text-brand-200 grid place-items-center font-bold font-display text-lg">${escape(e.name.split(' ').slice(0,2).map(n=>n[0]||'').join(''))}</div>`}
             <div class="min-w-0">
               <p class="font-display font-bold truncate text-brand-800 dark:text-white">${escape(e.name)}</p>
               <p class="text-xs text-slate-500 truncate">${escape(e.cargo||'-')}</p>
+              ${e.inativo ? `<span class="inline-block mt-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300">Inativo${e.inativoDesde ? ' desde ' + fmtDate(e.inativoDesde) : ''}</span>` : ''}
             </div>
           </div>
           <div class="mt-4 text-xs space-y-1 text-slate-600 dark:text-slate-300">
@@ -1067,7 +1078,10 @@ function renderFuncionarios() {
             <span class="font-display text-base font-bold text-brand-700 dark:text-brand-300">${fmtBRL(e.salario)}</span>
             <div class="flex items-center gap-1">
               <button onclick="empForm('${e.id}')" class="p-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800" title="Editar"><i data-lucide="pencil" class="w-4 h-4"></i></button>
-              <button onclick="empExcluir('${e.id}')" class="p-2 rounded hover:bg-red-50 dark:hover:bg-red-900/30 text-red-600" title="Excluir"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+              ${e.inativo
+                ? `<button onclick="empReativar('${e.id}')" class="p-2 rounded hover:bg-emerald-50 dark:hover:bg-emerald-900/30 text-emerald-600" title="Reativar"><i data-lucide="user-check" class="w-4 h-4"></i></button>
+                   <button onclick="empExcluir('${e.id}')" class="p-2 rounded hover:bg-red-50 dark:hover:bg-red-900/30 text-red-600" title="Excluir definitivamente"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`
+                : `<button onclick="empInativar('${e.id}')" class="p-2 rounded hover:bg-amber-50 dark:hover:bg-amber-900/30 text-amber-600" title="Inativar"><i data-lucide="user-x" class="w-4 h-4"></i></button>`}
             </div>
           </div>
         </div>
@@ -1135,9 +1149,41 @@ function empForm(id=null) {
     persist(); closeModal(); renderFuncionarios();
   });
 }
+function empInativar(id) {
+  const e = state.employees.find(x=>x.id===id); if (!e) return;
+  openModal({
+    title: 'Inativar funcionário',
+    body: `
+      <p class="text-sm text-slate-600 dark:text-slate-300 mb-4"><b>${escape(e.name)}</b> sai da lista de ativos e dos lançamentos novos.
+      O histórico (saídas, comissões, recibos e folhas fechadas) continua guardado. Dá para reativar depois.</p>
+      ${fld('Data da saída', `<input id="inatData" type="date" value="${todayISO()}" class="${inp()}">`)}
+      <div class="mt-3">${fld('Motivo (opcional)', `<input id="inatMotivo" placeholder="Ex: pediu demissão" class="${inp()}">`)}</div>
+    `,
+    footer: `
+      <button class="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-sm font-semibold" onclick="closeModal()">Cancelar</button>
+      <button id="inatOk" class="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold">Inativar</button>
+    `
+  });
+  document.getElementById('inatOk').addEventListener('click', () => {
+    const data = document.getElementById('inatData').value || todayISO();
+    const motivo = document.getElementById('inatMotivo').value.trim();
+    e.inativo = true;
+    e.inativoDesde = data;
+    e.inativoMotivo = motivo;
+    persist(); closeModal(); renderFuncionarios();
+    toast(`${e.name} inativado`, 'success');
+  });
+}
+function empReativar(id) {
+  const e = state.employees.find(x=>x.id===id); if (!e) return;
+  confirmAction(`Reativar ${e.name}? Volta para a lista de ativos e para a folha.`, () => {
+    delete e.inativo; delete e.inativoDesde; delete e.inativoMotivo;
+    persist(); renderFuncionarios(); toast(`${e.name} reativado`, 'success');
+  });
+}
 function empExcluir(id) {
   const e = state.employees.find(x=>x.id===id); if (!e) return;
-  confirmAction(`Excluir ${e.name}? Saídas e pagamentos vinculados também serão removidos.`, () => {
+  confirmAction(`EXCLUIR DEFINITIVAMENTE ${e.name}? Saídas e pagamentos vinculados também serão apagados. Se ele só saiu da empresa, deixe INATIVO.`, () => {
     state.employees = state.employees.filter(x=>x.id!==id);
     state.saidas    = state.saidas.filter(s=>s.employeeId!==id);
     state.pagamentos= state.pagamentos.filter(p=>p.employeeId!==id);
@@ -1168,7 +1214,7 @@ function renderFolha() {
     meses.push({ key: d.toISOString().slice(0,7), label: d.toLocaleDateString('pt-BR',{month:'long', year:'numeric'}) });
   }
   const q = folhaSearch.toLowerCase();
-  const rows = empsOrdenados()
+  const rows = empsDoMes(folhaMes)
     .filter(e => !q || e.name.toLowerCase().includes(q))
     .map(e => {
       const d = descontosAgregados(e.id, folhaMes);
@@ -1445,7 +1491,7 @@ function renderSaidas() {
         <span class="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Funcionário</span>
         <select id="sdFunc" class="${inp()} mt-1">
           <option value="todos">Todos</option>
-          ${empsOrdenados().map(e=>`<option value="${e.id}" ${saidasFunc===e.id?'selected':''}>${escape(e.name)}</option>`).join('')}
+          ${empsTodos().map(e=>`<option value="${e.id}" ${saidasFunc===e.id?'selected':''}>${nomeEmpOpt(e)}</option>`).join('')}
         </select>
       </label>
       <div class="flex items-end">
@@ -1654,7 +1700,7 @@ function saidaForm(id=null) {
 
   const buildBody = () => `
     <form id="sdForm" class="grid sm:grid-cols-2 gap-4">
-      ${fld('Funcionário', `<select id="sdEmp" name="employeeId" class="${inp()}">${empsOrdenados().map(e=>`<option value="${e.id}" ${e.id===formState.employeeId?'selected':''}>${escape(e.name)}</option>`).join('')}</select>`,'sm:col-span-2')}
+      ${fld('Funcionário', `<select id="sdEmp" name="employeeId" class="${inp()}">${empsParaSelecao(formState.employeeId).map(e=>`<option value="${e.id}" ${e.id===formState.employeeId?'selected':''}>${nomeEmpOpt(e)}</option>`).join('')}</select>`,'sm:col-span-2')}
       ${fld('Tipo', `<select id="sdTipo" name="tipo" class="${inp()}">${TIPOS_SAIDA.map(t=>`<option value="${t.id}" ${t.id===formState.tipo?'selected':''}>${t.label}</option>`).join('')}</select>`)}
       ${fld('Data', `<input id="sdData" name="data" type="date" value="${formState.data}" class="${inp()}">`)}
       ${fld('Valor cheio (R$)', `<input id="sdValor" name="valor" type="number" step="0.01" min="0" value="${formState.valorInput}" required class="${inp()}">`,'sm:col-span-2')}
@@ -1791,7 +1837,7 @@ function renderRecibos() {
         <h3 class="font-display font-bold text-brand-800 dark:text-white mb-1">Recibos de pagamento</h3>
         <p class="text-sm text-slate-500 mb-4">Gere o recibo de qualquer funcionário em qualquer mês.</p>
         <div class="grid grid-cols-2 gap-3">
-          <select id="rpEmp" class="${inp()}">${empsOrdenados().map(e=>`<option value="${e.id}">${escape(e.name)}</option>`).join('')}</select>
+          <select id="rpEmp" class="${inp()}">${empsTodos().map(e=>`<option value="${e.id}">${nomeEmpOpt(e)}</option>`).join('')}</select>
           <select id="rpMes" class="${inp()}">${monthsOptions(monthKey(todayISO()))}</select>
         </div>
         <button onclick="gerarReciboPagamento(document.getElementById('rpEmp').value, document.getElementById('rpMes').value)"
@@ -2095,7 +2141,21 @@ const slug = (s) => String(s||'').toLowerCase().normalize('NFD').replace(/[^a-z0
 /* Compara nomes em PT-BR (ignora acentos, maiúsculas, pontuação) */
 const cmpNome = (a,b) => String(a?.name||'').localeCompare(String(b?.name||''), 'pt-BR', { sensitivity:'base', ignorePunctuation:true });
 /* Retorna funcionários ordenados alfabeticamente (não muda o array original) */
-const empsOrdenados = () => state.employees.slice().sort(cmpNome);
+const empsTodos = () => state.employees.slice().sort(cmpNome);
+// Só ATIVOS (para lançamentos novos e listas do dia a dia)
+const empsOrdenados = () => state.employees.filter(e => !e.inativo).sort(cmpNome);
+// Funcionário entra na folha de um mês se estava ativo nele ou se teve lançamento no mês
+function empNoMes(e, mes) {
+  if (!e.inativo) return true;
+  if (e.inativoDesde && monthKey(e.inativoDesde) >= mes) return true;
+  const tem = (arr) => (arr || []).some(x => x.employeeId === e.id && x.data && monthKey(x.data) === mes);
+  return tem(state.saidas) || tem(state.comissoes) || tem(state.bonificacoes) || tem(state.ferias)
+    || (state.pagamentos || []).some(p => p.employeeId === e.id && p.mes === mes && p.status === 'pago');
+}
+const empsDoMes = (mes) => empsTodos().filter(e => empNoMes(e, mes));
+// Formulários: ativos + o funcionário já escolhido (se for inativo), para editar lançamentos antigos sem trocar de pessoa
+const empsParaSelecao = (idAtual) => empsTodos().filter(e => !e.inativo || e.id === idAtual);
+const nomeEmpOpt = (e) => escape(e.name) + (e.inativo ? ' (inativo)' : '');
 
 /* ==========================================================
    MÓDULO: COMISSÕES E BONIFICAÇÕES
@@ -2153,7 +2213,7 @@ function renderExtras() {
             <span class="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Funcionário</span>
             <select id="extrasFuncSel" class="${inp()} mt-1">
               <option value="todos">Todos</option>
-              ${empsOrdenados().map(e=>`<option value="${e.id}" ${extrasFunc===e.id?'selected':''}>${escape(e.name)}</option>`).join('')}
+              ${empsTodos().map(e=>`<option value="${e.id}" ${extrasFunc===e.id?'selected':''}>${nomeEmpOpt(e)}</option>`).join('')}
             </select>
           </label>
           <div class="flex items-end">
@@ -2171,7 +2231,7 @@ function renderExtras() {
             <p class="text-xs text-slate-600 dark:text-slate-300 mb-3">Gera um único recibo do mês <strong>${extrasMes}</strong>. Escolha o funcionário e o tipo:</p>
             <div class="flex flex-col sm:flex-row gap-2">
               <select id="ganhosEmpSel" class="${inp()} text-sm flex-1">
-                ${empsOrdenados().map(e=>`<option value="${e.id}" ${extrasFunc===e.id?'selected':''}>${escape(e.name)}</option>`).join('')}
+                ${empsTodos().map(e=>`<option value="${e.id}" ${extrasFunc===e.id?'selected':''}>${nomeEmpOpt(e)}</option>`).join('')}
               </select>
               <button onclick="gerarReciboGanhos(document.getElementById('ganhosEmpSel').value, '${extrasMes}', true)" class="px-4 py-2.5 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold flex items-center justify-center gap-2 whitespace-nowrap"><i data-lucide="calculator" class="w-4 h-4"></i> Com descontos (líquido)</button>
               <button onclick="gerarReciboGanhos(document.getElementById('ganhosEmpSel').value, '${extrasMes}', false)" class="px-4 py-2.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white text-sm font-semibold flex items-center justify-center gap-2 whitespace-nowrap"><i data-lucide="file-text" class="w-4 h-4"></i> Só ganhos</button>
@@ -2245,7 +2305,7 @@ function renderComissoesList() {
 
 function comissaoForm(id=null) {
   if (state.employees.length === 0) { toast('Cadastre funcionários primeiro','warn'); return; }
-  const c = id ? state.comissoes.find(x=>x.id===id) : { employeeId: state.employees[0]?.id||'', tipo:'quantidade', data: todayISO(), valor:0, obs:'', descricao:'', quantidade:1, valorUnitario:0, base:0, percentual:0, regras: [] };
+  const c = id ? state.comissoes.find(x=>x.id===id) : { employeeId: empsOrdenados()[0]?.id||'', tipo:'quantidade', data: todayISO(), valor:0, obs:'', descricao:'', quantidade:1, valorUnitario:0, base:0, percentual:0, regras: [] };
   if (!c) return;
   // Para edição: se for combinada e não tiver regras, inicializa com uma regra vazia
   if (c.tipo === 'combinada' && (!c.regras || c.regras.length === 0)) {
@@ -2404,7 +2464,7 @@ function comissaoForm(id=null) {
     body: `
       <form id="cmForm" class="space-y-4">
         <div class="grid sm:grid-cols-2 gap-4">
-          ${fld('Funcionário', `<select name="employeeId" class="${inp()}">${empsOrdenados().map(e=>`<option value="${e.id}" ${e.id===c.employeeId?'selected':''}>${escape(e.name)}</option>`).join('')}</select>`)}
+          ${fld('Funcionário', `<select name="employeeId" class="${inp()}">${empsParaSelecao(c.employeeId).map(e=>`<option value="${e.id}" ${e.id===c.employeeId?'selected':''}>${nomeEmpOpt(e)}</option>`).join('')}</select>`)}
           ${fld('Data', `<input name="data" type="date" value="${c.data}" class="${inp()}">`)}
         </div>
         ${fld('Tipo de comissão', `<select id="cmTipo" class="${inp()}">${TIPOS_COMISSAO.map(t=>`<option value="${t.id}" ${t.id===c.tipo?'selected':''}>${t.label}</option>`).join('')}</select>`)}
@@ -2545,14 +2605,14 @@ function renderBonificacoesList() {
 
 function bonificacaoForm(id=null) {
   if (state.employees.length === 0) { toast('Cadastre funcionários primeiro','warn'); return; }
-  const b = id ? state.bonificacoes.find(x=>x.id===id) : { employeeId: state.employees[0]?.id||'', data: todayISO(), valor:0, motivo:'', obs:'' };
+  const b = id ? state.bonificacoes.find(x=>x.id===id) : { employeeId: empsOrdenados()[0]?.id||'', data: todayISO(), valor:0, motivo:'', obs:'' };
   if (!b) return;
   openModal({
     title: id ? 'Editar bonificação' : 'Nova bonificação',
     body: `
       <form id="bonForm" class="space-y-4">
         <div class="grid sm:grid-cols-2 gap-4">
-          ${fld('Funcionário', `<select name="employeeId" class="${inp()}">${empsOrdenados().map(e=>`<option value="${e.id}" ${e.id===b.employeeId?'selected':''}>${escape(e.name)}</option>`).join('')}</select>`)}
+          ${fld('Funcionário', `<select name="employeeId" class="${inp()}">${empsParaSelecao(b.employeeId).map(e=>`<option value="${e.id}" ${e.id===b.employeeId?'selected':''}>${nomeEmpOpt(e)}</option>`).join('')}</select>`)}
           ${fld('Data', `<input name="data" type="date" value="${b.data}" class="${inp()}">`)}
         </div>
         ${fld('Valor (R$)', `<input name="valor" type="number" step="0.01" min="0" value="${b.valor||0}" required class="${inp()}">`)}
@@ -2857,7 +2917,7 @@ function renderFerias() {
             <span class="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Funcionário</span>
             <select id="feriasFuncSel" class="${inp()} mt-1">
               <option value="todos">Todos</option>
-              ${empsOrdenados().map(e=>`<option value="${e.id}" ${feriasFiltroFunc===e.id?'selected':''}>${escape(e.name)}</option>`).join('')}
+              ${empsTodos().map(e=>`<option value="${e.id}" ${feriasFiltroFunc===e.id?'selected':''}>${nomeEmpOpt(e)}</option>`).join('')}
             </select>
           </label>
           <div class="flex items-end">
@@ -2927,7 +2987,7 @@ function feriasForm(id=null) {
     title: id ? 'Editar férias' : 'Novo recibo de férias',
     body: `
       <form id="feriasForm" class="space-y-4">
-        ${fld('Funcionário', `<select name="employeeId" class="${inp()}">${empsOrdenados().map(e=>`<option value="${e.id}" ${e.id===f.employeeId?'selected':''}>${escape(e.name)}</option>`).join('')}</select>`)}
+        ${fld('Funcionário', `<select name="employeeId" class="${inp()}">${empsParaSelecao(f.employeeId).map(e=>`<option value="${e.id}" ${e.id===f.employeeId?'selected':''}>${nomeEmpOpt(e)}</option>`).join('')}</select>`)}
         <div class="grid sm:grid-cols-3 gap-4">
           ${fld('Data do pagamento', `<input name="dataPagamento" type="date" value="${f.dataPagamento}" class="${inp()}">`)}
           ${fld('Início do período', `<input name="periodoInicio" type="date" value="${f.periodoInicio}" class="${inp()}">`)}
@@ -3038,6 +3098,327 @@ function gerarReciboFerias(id) {
   gerarReciboDuasVias(`recibo-ferias-${slug(emp?.name||'funcionario')}-${f.dataPagamento}.pdf`, builder);
   toast('Recibo gerado','success');
 }
+
+/* ==========================================================
+   MÓDULO: DÉCIMO TERCEIRO
+   Pagamento separado: NÃO entra na folha, no dashboard nem no fechamento do mês.
+   ========================================================== */
+let decimoAno = String(new Date().getFullYear());
+let decimoFunc = 'todos';
+const PARCELA_TXT = { '1': '1ª parcela', '2': '2ª parcela', 'unica': 'Parcela única' };
+const liquidoDecimo = (d) => Math.round(((Number(d.valorBruto)||0) - (Number(d.adiantamento)||0) - (Number(d.inss)||0) - (Number(d.outros)||0)) * 100) / 100;
+
+/* Meses (avos) trabalhados no ano: mês com 15 dias ou mais conta */
+function avosDecimo(e, ano) {
+  const A = Number(ano);
+  let ini = 1, fim = 12;
+  const dias = (y, m) => new Date(y, m, 0).getDate();
+  if (e.admissao && /^\d{4}-\d{2}-\d{2}/.test(e.admissao)) {
+    const [y, m, d] = e.admissao.split('-').map(Number);
+    if (y > A) return 0;
+    if (y === A) ini = (dias(y, m) - d + 1) >= 15 ? m : m + 1;
+  }
+  if (e.inativo && e.inativoDesde && /^\d{4}-\d{2}-\d{2}/.test(e.inativoDesde)) {
+    const [y, m, d] = e.inativoDesde.split('-').map(Number);
+    if (y < A) return 0;
+    if (y === A) fim = d >= 15 ? m : m - 1;
+  }
+  return Math.max(0, Math.min(12, fim - ini + 1));
+}
+const previstoDecimo = (e, ano, avos) => Math.round((Number(e.salario)||0) * (avos ?? avosDecimo(e, ano)) / 12 * 100) / 100;
+const decimoDe = (empId, ano, parcela) => state.decimo.find(d => d.employeeId === empId && String(d.ano) === String(ano) && d.parcela === parcela);
+
+function renderDecimo() {
+  if (!Array.isArray(state.decimo)) state.decimo = [];
+  const anosSet = new Set(state.decimo.map(d => String(d.ano)));
+  const atual = new Date().getFullYear();
+  [atual - 1, atual, atual + 1].forEach(a => anosSet.add(String(a)));
+  anosSet.add(decimoAno);
+  const anos = Array.from(anosSet).sort((a,b)=>b.localeCompare(a));
+
+  const lancAno = state.decimo.filter(d => String(d.ano) === decimoAno);
+  // funcionários do ano: ativos com avos > 0 + quem tem lançamento no ano
+  const emps = empsTodos().filter(e => lancAno.some(d => d.employeeId === e.id) || (!e.inativo && avosDecimo(e, decimoAno) > 0) || (e.inativo && avosDecimo(e, decimoAno) > 0))
+    .filter(e => decimoFunc === 'todos' || e.id === decimoFunc);
+
+  const tot1 = lancAno.filter(d => d.parcela === '1').reduce((s,d) => s + liquidoDecimo(d), 0);
+  const tot2 = lancAno.filter(d => d.parcela !== '1').reduce((s,d) => s + liquidoDecimo(d), 0);
+  const pend1 = emps.filter(e => !e.inativo && !decimoDe(e.id, decimoAno, '1') && !decimoDe(e.id, decimoAno, 'unica')).length;
+  const pend2 = emps.filter(e => !e.inativo && !decimoDe(e.id, decimoAno, '2') && !decimoDe(e.id, decimoAno, 'unica')).length;
+
+  const celula = (e, parc) => {
+    const d = decimoDe(e.id, decimoAno, parc) || (decimoDe(e.id, decimoAno, 'unica') ? null : null);
+    const unica = decimoDe(e.id, decimoAno, 'unica');
+    if (unica) return parc === '1'
+      ? `<div class="text-xs"><b class="text-emerald-700 dark:text-emerald-300">${fmtBRL(liquidoDecimo(unica))}</b> <span class="text-slate-500">única · ${fmtDate(unica.data)}</span>
+           <div class="flex gap-1 mt-1">${botoesDecimo(unica)}</div></div>`
+      : `<span class="text-xs text-slate-400">— (parcela única)</span>`;
+    if (!d) return `<button onclick="decimoForm(null,'${e.id}','${parc}')" class="px-2.5 py-1.5 rounded-md ${parc==='1'?'bg-sky-600 hover:bg-sky-700':'bg-violet-600 hover:bg-violet-700'} text-white text-xs font-semibold flex items-center gap-1"><i data-lucide="plus" class="w-3.5 h-3.5"></i> Lançar ${parc}ª</button>`;
+    return `<div class="text-xs"><b class="text-emerald-700 dark:text-emerald-300">${fmtBRL(liquidoDecimo(d))}</b> <span class="text-slate-500">· ${fmtDate(d.data)}</span>
+      <div class="flex gap-1 mt-1">${botoesDecimo(d)}</div></div>`;
+  };
+
+  document.getElementById('page').innerHTML = `
+    <div class="mb-4 rounded-xl border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-900/20 p-3 text-xs text-violet-800 dark:text-violet-200">
+      🎁 O 13º é um pagamento <b>separado</b>: não entra na Folha de Pagamento, no Dashboard nem no Fechamento do mês.
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      <div class="rounded-2xl p-4 bg-gradient-to-br from-sky-600 to-sky-800 text-white shadow-lg"><p class="text-xs uppercase tracking-wider opacity-80">1ª parcela (${decimoAno})</p><p class="font-display text-xl sm:text-2xl font-bold mt-1">${fmtBRL(tot1)}</p></div>
+      <div class="rounded-2xl p-4 bg-gradient-to-br from-violet-600 to-violet-800 text-white shadow-lg"><p class="text-xs uppercase tracking-wider opacity-80">2ª parcela (${decimoAno})</p><p class="font-display text-xl sm:text-2xl font-bold mt-1">${fmtBRL(tot2)}</p></div>
+      <div class="rounded-2xl p-4 bg-gradient-to-br from-brand-600 to-brand-800 text-white shadow-lg"><p class="text-xs uppercase tracking-wider opacity-80">Total pago (${decimoAno})</p><p class="font-display text-xl sm:text-2xl font-bold mt-1">${fmtBRL(tot1 + tot2)}</p></div>
+      <div class="rounded-2xl p-4 bg-gradient-to-br from-accent-500 to-accent-600 text-white shadow-lg"><p class="text-xs uppercase tracking-wider opacity-80">Faltam lançar</p><p class="font-display text-lg sm:text-xl font-bold mt-1">1ª: ${pend1} · 2ª: ${pend2}</p></div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+      <div class="p-4 sm:p-5">
+        <div class="grid sm:grid-cols-4 gap-3 mb-4">
+          <label class="block"><span class="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Ano</span>
+            <select id="decAnoSel" class="${inp()} mt-1">${anos.map(a=>`<option value="${a}" ${a===decimoAno?'selected':''}>${a}</option>`).join('')}</select></label>
+          <label class="block sm:col-span-2"><span class="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Funcionário</span>
+            <select id="decFuncSel" class="${inp()} mt-1"><option value="todos">Todos</option>${empsTodos().map(e=>`<option value="${e.id}" ${decimoFunc===e.id?'selected':''}>${nomeEmpOpt(e)}</option>`).join('')}</select></label>
+          <div class="flex items-end gap-2">
+            <button onclick="decimoForm()" class="flex-1 px-3 py-2.5 rounded-lg bg-brand-700 hover:bg-brand-800 text-white font-semibold flex items-center justify-center gap-2 text-sm"><i data-lucide="plus" class="w-4 h-4"></i> Novo</button>
+            <button onclick="exportarDecimoPDF()" class="px-3 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold flex items-center gap-1 text-sm" title="Relatório do ano em PDF"><i data-lucide="file-down" class="w-4 h-4"></i> PDF</button>
+          </div>
+        </div>
+
+        ${emps.length === 0 ? `<div class="text-center py-10 text-slate-500"><i data-lucide="gift" class="w-10 h-10 mx-auto"></i><p class="mt-2">Nenhum funcionário para ${decimoAno}.</p></div>` : `
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left text-xs uppercase text-slate-500 border-b border-slate-200 dark:border-slate-700">
+              <th class="py-2 pr-3">Funcionário</th><th class="py-2 pr-3 text-right">Salário</th><th class="py-2 pr-3 text-center">Avos</th>
+              <th class="py-2 pr-3 text-right">13º previsto</th><th class="py-2 pr-3">1ª parcela</th><th class="py-2 pr-3">2ª parcela</th><th class="py-2 text-right">Total pago</th>
+            </tr></thead>
+            <tbody>
+              ${emps.map(e => {
+                const avos = avosDecimo(e, decimoAno);
+                const pago = state.decimo.filter(d => d.employeeId === e.id && String(d.ano) === decimoAno).reduce((s,d) => s + liquidoDecimo(d), 0);
+                return `<tr class="border-b border-slate-100 dark:border-slate-800 align-top ${e.inativo ? 'opacity-60' : ''}">
+                  <td class="py-2 pr-3"><div class="font-semibold text-brand-800 dark:text-white">${escape(e.name)}</div><div class="text-[11px] text-slate-500">${escape(e.cargo||'')}${e.inativo ? ' · inativo' : ''}${e.admissao ? ' · adm. ' + fmtDate(e.admissao) : ''}</div></td>
+                  <td class="py-2 pr-3 text-right font-mono">${fmtBRL(e.salario)}</td>
+                  <td class="py-2 pr-3 text-center">${avos}/12</td>
+                  <td class="py-2 pr-3 text-right font-mono font-bold">${fmtBRL(previstoDecimo(e, decimoAno))}</td>
+                  <td class="py-2 pr-3">${celula(e, '1')}</td>
+                  <td class="py-2 pr-3">${celula(e, '2')}</td>
+                  <td class="py-2 text-right font-mono font-bold text-emerald-700 dark:text-emerald-300">${pago ? fmtBRL(pago) : '-'}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+        <p class="text-[11px] text-slate-400 mt-3">Avos: meses trabalhados no ano (mês com 15 dias ou mais conta). 13º previsto = salário × avos ÷ 12. Os valores são sugestões — você pode alterar no lançamento.</p>`}
+      </div>
+    </div>
+  `;
+  lucide.createIcons();
+  document.getElementById('decAnoSel').addEventListener('change', e => { decimoAno = e.target.value; renderDecimo(); });
+  document.getElementById('decFuncSel').addEventListener('change', e => { decimoFunc = e.target.value; renderDecimo(); });
+}
+
+function botoesDecimo(d) {
+  return `<button onclick="gerarReciboDecimo('${d.id}')" class="px-2 py-1 rounded bg-brand-50 dark:bg-brand-900/40 text-brand-700 dark:text-brand-200 text-[11px] font-semibold" title="Recibo"><i data-lucide="file-text" class="w-3.5 h-3.5 inline"></i> Recibo</button>
+    <button onclick="decimoForm('${d.id}')" class="px-2 py-1 rounded bg-slate-200 dark:bg-slate-700 text-[11px] font-semibold" title="Editar"><i data-lucide="pencil" class="w-3.5 h-3.5 inline"></i></button>
+    <button onclick="decimoExcluir('${d.id}')" class="px-2 py-1 rounded bg-red-600 hover:bg-red-700 text-white text-[11px] font-semibold" title="Excluir"><i data-lucide="trash-2" class="w-3.5 h-3.5 inline"></i></button>`;
+}
+
+/* Sugestão de valores conforme a parcela */
+function sugestaoDecimo(empId, ano, parcela, avos, ignorarId) {
+  const e = state.employees.find(x => x.id === empId);
+  if (!e) return { valorBruto: 0, adiantamento: 0 };
+  const integral = previstoDecimo(e, ano, avos);
+  if (parcela === '1') return { valorBruto: Math.round(integral / 2 * 100) / 100, adiantamento: 0 };
+  const p1 = state.decimo.find(d => d.employeeId === empId && String(d.ano) === String(ano) && d.parcela === '1' && d.id !== ignorarId);
+  return { valorBruto: integral, adiantamento: parcela === '2' && p1 ? liquidoDecimo(p1) + (Number(p1.inss)||0) + (Number(p1.outros)||0) : 0 };
+}
+
+function decimoForm(id = null, empId = null, parcela = null) {
+  if (empsOrdenados().length === 0 && !id) { toast('Cadastre funcionários primeiro','warn'); return; }
+  if (!Array.isArray(state.decimo)) state.decimo = [];
+  const ano = decimoAno;
+  let d;
+  if (id) d = state.decimo.find(x => x.id === id);
+  else {
+    const eid = empId || (decimoFunc !== 'todos' ? decimoFunc : empsOrdenados()[0]?.id) || '';
+    const e = state.employees.find(x => x.id === eid);
+    const parc = parcela || (eid && decimoDe(eid, ano, '1') ? '2' : '1');
+    const avos = e ? avosDecimo(e, ano) : 12;
+    const sug = sugestaoDecimo(eid, ano, parc, avos);
+    const hoje = todayISO();
+    d = { employeeId: eid, ano, parcela: parc, data: hoje.slice(0,4) === ano ? hoje : `${ano}-${parc === '1' ? '11-30' : '12-20'}`, avos, valorBruto: sug.valorBruto, adiantamento: sug.adiantamento, inss: 0, outros: 0, outrosDesc: '', obs: '' };
+  }
+  if (!d) return;
+
+  openModal({
+    title: id ? 'Editar 13º salário' : 'Lançar 13º salário',
+    body: `
+      <form id="decForm" class="space-y-4">
+        ${fld('Funcionário', `<select id="decEmp" name="employeeId" class="${inp()}">${empsParaSelecao(d.employeeId).map(e=>`<option value="${e.id}" ${e.id===d.employeeId?'selected':''}>${nomeEmpOpt(e)}</option>`).join('')}</select>`)}
+        <div class="grid sm:grid-cols-4 gap-4">
+          ${fld('Ano', `<input id="decAno" name="ano" type="number" min="2000" max="2100" value="${d.ano}" class="${inp()}">`)}
+          ${fld('Parcela', `<select id="decParc" name="parcela" class="${inp()}">${Object.entries(PARCELA_TXT).map(([k,v])=>`<option value="${k}" ${k===d.parcela?'selected':''}>${v}</option>`).join('')}</select>`)}
+          ${fld('Avos (meses)', `<input id="decAvos" name="avos" type="number" min="0" max="12" value="${d.avos}" class="${inp()}">`)}
+          ${fld('Data do pagamento', `<input name="data" type="date" value="${d.data}" class="${inp()}">`)}
+        </div>
+        <div class="flex items-center justify-between gap-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-[11px] text-slate-600 dark:text-slate-300">
+          <span id="decInfo"></span>
+          <button type="button" id="decSugerir" class="px-2 py-1 rounded bg-brand-700 text-white font-semibold whitespace-nowrap">↻ Sugerir valores</button>
+        </div>
+        <div class="grid sm:grid-cols-2 gap-4">
+          ${fld('<span id="decRotBruto">Valor bruto (R$)</span>', `<input id="decBruto" name="valorBruto" type="number" min="0" step="0.01" value="${d.valorBruto||0}" class="${inp()}">`)}
+          ${fld('(−) Adiantamento da 1ª parcela (R$)', `<input id="decAdto" name="adiantamento" type="number" min="0" step="0.01" value="${d.adiantamento||0}" class="${inp()}">`)}
+          ${fld('(−) INSS (R$)', `<input id="decInss" name="inss" type="number" min="0" step="0.01" value="${d.inss||0}" class="${inp()}">`)}
+          ${fld('(−) Outros descontos (R$)', `<input id="decOutros" name="outros" type="number" min="0" step="0.01" value="${d.outros||0}" class="${inp()}">`)}
+        </div>
+        ${fld('Descrição dos outros descontos', `<input name="outrosDesc" value="${escape(d.outrosDesc||'')}" placeholder="Opcional" class="${inp()}">`)}
+        ${fld('Observação (opcional)', `<textarea name="obs" rows="2" class="${inp()}">${escape(d.obs||'')}</textarea>`)}
+        <div class="bg-violet-50 dark:bg-violet-900/30 border border-violet-200 dark:border-violet-800 rounded-lg p-3 flex items-center justify-between">
+          <span class="text-xs font-semibold uppercase text-violet-800 dark:text-violet-200">Líquido a receber</span>
+          <span id="decPreview" class="font-display text-xl font-bold text-violet-700 dark:text-violet-300"></span>
+        </div>
+      </form>
+    `,
+    footer: `
+      <button class="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-sm font-semibold" onclick="closeModal()">Cancelar</button>
+      <button id="decSave" class="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold">Salvar</button>
+    `
+  });
+
+  const $ = (i) => document.getElementById(i);
+  const atualizar = () => {
+    const e = state.employees.find(x => x.id === $('decEmp').value);
+    const parc = $('decParc').value;
+    const avos = Number($('decAvos').value) || 0;
+    const integral = e ? previstoDecimo(e, $('decAno').value, avos) : 0;
+    $('decInfo').innerHTML = e ? `Salário ${fmtBRL(e.salario)} · ${avos}/12 avos · 13º integral <b>${fmtBRL(integral)}</b>${parc === '1' ? ` · metade <b>${fmtBRL(integral/2)}</b>` : ''}` : '';
+    $('decRotBruto').textContent = parc === '1' ? 'Valor da 1ª parcela (R$)' : '13º integral bruto (R$)';
+    $('decAdto').closest('label').style.display = parc === '2' ? '' : 'none';
+    const liq = liquidoDecimo({ valorBruto: $('decBruto').value, adiantamento: parc === '2' ? $('decAdto').value : 0, inss: $('decInss').value, outros: $('decOutros').value });
+    $('decPreview').textContent = fmtBRL(liq);
+  };
+  const sugerir = () => {
+    const e = state.employees.find(x => x.id === $('decEmp').value);
+    if (!e) return;
+    const s = sugestaoDecimo(e.id, $('decAno').value, $('decParc').value, Number($('decAvos').value) || 0, id);
+    $('decBruto').value = s.valorBruto; $('decAdto').value = s.adiantamento;
+    atualizar();
+  };
+  $('decEmp').addEventListener('change', () => { const e = state.employees.find(x => x.id === $('decEmp').value); if (e) $('decAvos').value = avosDecimo(e, $('decAno').value); sugerir(); });
+  $('decParc').addEventListener('change', sugerir);
+  $('decAvos').addEventListener('input', sugerir);
+  $('decAno').addEventListener('change', () => { const e = state.employees.find(x => x.id === $('decEmp').value); if (e) $('decAvos').value = avosDecimo(e, $('decAno').value); sugerir(); });
+  $('decSugerir').addEventListener('click', sugerir);
+  ['decBruto','decAdto','decInss','decOutros'].forEach(i => $(i).addEventListener('input', atualizar));
+  atualizar();
+
+  $('decSave').addEventListener('click', () => {
+    const data = Object.fromEntries(new FormData($('decForm')).entries());
+    data.ano = String(data.ano);
+    data.avos = Number(data.avos) || 0;
+    ['valorBruto','adiantamento','inss','outros'].forEach(k => data[k] = Math.round((Number(data[k])||0) * 100) / 100);
+    if (data.parcela !== '2') data.adiantamento = 0;
+    if (!data.employeeId) { toast('Escolha o funcionário','error'); return; }
+    if (data.valorBruto <= 0) { toast('Informe o valor','error'); return; }
+    if (liquidoDecimo(data) < 0) { toast('Os descontos passam do valor bruto','error'); return; }
+    const dup = state.decimo.find(x => x.id !== id && x.employeeId === data.employeeId && String(x.ano) === data.ano && (x.parcela === data.parcela || x.parcela === 'unica' || data.parcela === 'unica'));
+    if (dup) { toast(`Já existe ${PARCELA_TXT[dup.parcela]} de ${data.ano} para este funcionário`,'error'); return; }
+    if (id) Object.assign(state.decimo.find(x => x.id === id), data);
+    else state.decimo.push({ id: uid(), criadoEm: new Date().toISOString(), ...data });
+    decimoAno = data.ano;
+    persist(); closeModal(); renderDecimo(); toast('13º salvo','success');
+  });
+}
+
+function decimoExcluir(id) {
+  const d = state.decimo.find(x => x.id === id); if (!d) return;
+  const e = state.employees.find(x => x.id === d.employeeId);
+  confirmAction(`Excluir a ${PARCELA_TXT[d.parcela]} do 13º/${d.ano} de ${e?.name || 'funcionário'}?`, () => {
+    state.decimo = state.decimo.filter(x => x.id !== id);
+    persist(); renderDecimo(); toast('Lançamento excluído','success');
+  });
+}
+
+function gerarReciboDecimo(id) {
+  const d = state.decimo.find(x => x.id === id);
+  if (!d) return toast('Recibo não encontrado','error');
+  const emp = state.employees.find(e => e.id === d.employeeId);
+  const liq = liquidoDecimo(d);
+  const titulo = `RECIBO DE 13º SALÁRIO · ${PARCELA_TXT[d.parcela].toUpperCase()} · ${d.ano}`;
+  const body = [];
+  if (d.parcela === '1') body.push([`13º salário — 1ª parcela (adiantamento) · ${d.avos}/12 avos`, '+ ' + fmtBRL(d.valorBruto)]);
+  else body.push([`13º salário integral · ${d.avos}/12 avos`, '+ ' + fmtBRL(d.valorBruto)]);
+  if (Number(d.adiantamento) > 0) {
+    const p1 = state.decimo.find(x => x.employeeId === d.employeeId && String(x.ano) === String(d.ano) && x.parcela === '1');
+    body.push([`(−) 1ª parcela já paga${p1 ? ' em ' + fmtDate(p1.data) : ''}`, '- ' + fmtBRL(d.adiantamento)]);
+  }
+  if (Number(d.inss) > 0) body.push(['(−) INSS', '- ' + fmtBRL(d.inss)]);
+  if (Number(d.outros) > 0) body.push([`(−) ${d.outrosDesc || 'Outros descontos'}`, '- ' + fmtBRL(d.outros)]);
+
+  const builder = (doc, y0, via) => {
+    reciboHdrC(doc, titulo, y0, via);
+    let y = y0 + 27;
+    doc.setFontSize(8);
+    doc.setFont('helvetica','bold'); doc.text('Funcionário:', 12, y); doc.setFont('helvetica','normal'); doc.text(emp?.name||'-', 35, y);
+    doc.setFont('helvetica','bold'); doc.text('CPF:', 140, y); doc.setFont('helvetica','normal'); doc.text(emp?.cpf||'-', 150, y);
+    y += 4.5;
+    doc.setFont('helvetica','bold'); doc.text('Cargo:', 12, y); doc.setFont('helvetica','normal'); doc.text(emp?.cargo||'-', 35, y);
+    doc.setFont('helvetica','bold'); doc.text('Pagto:', 140, y); doc.setFont('helvetica','normal'); doc.text(fmtDate(d.data), 150, y);
+    y += 4.5;
+    doc.setFont('helvetica','bold'); doc.text('Salário base:', 12, y); doc.setFont('helvetica','normal'); doc.text(fmtBRL(emp?.salario||0), 35, y);
+    doc.autoTable({
+      startY: y + 3,
+      head: [['Descrição', 'Valor']],
+      body,
+      foot: [['LÍQUIDO A RECEBER', fmtBRL(liq)]],
+      theme: 'grid',
+      headStyles: { fillColor: [15,61,46], textColor: 255, fontStyle: 'bold', fontSize: 8 },
+      footStyles: { fillColor: [255,122,26], textColor: 255, fontStyle: 'bold', fontSize: 10 },
+      columnStyles: { 1: { halign: 'right', cellWidth: 50 } },
+      styles: { fontSize: 8, cellPadding: 1.8 },
+      margin: { left: 12, right: 12 }
+    });
+    let yEnd = doc.lastAutoTable.finalY + 4;
+    doc.setFontSize(8);
+    const texto = `Declaro ter recebido de ${state.company.name || 'a empresa'} a importância líquida de ${fmtBRL(liq)} (${numeroPorExtenso(liq)}) referente à ${PARCELA_TXT[d.parcela].toLowerCase()} do 13º salário de ${d.ano}.${d.obs ? ' Obs.: ' + d.obs : ''}`;
+    const lines = doc.splitTextToSize(texto, 186);
+    doc.text(lines, 12, yEnd);
+    yEnd += lines.length * 3.5 + 9;
+    reciboAssC(doc, yEnd, emp?.name || '');
+    reciboFooterC(doc, y0 + 140);
+  };
+  gerarReciboDuasVias(`recibo-13-${d.parcela}-${d.ano}-${slug(emp?.name||'funcionario')}.pdf`, builder);
+  toast('Recibo gerado','success');
+}
+
+function exportarDecimoPDF() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape' });
+  reciboHeader(doc, `13º SALÁRIO · ${decimoAno}`);
+  const emps = empsTodos().filter(e => state.decimo.some(d => d.employeeId === e.id && String(d.ano) === decimoAno) || avosDecimo(e, decimoAno) > 0);
+  let t1 = 0, t2 = 0;
+  const cel = (d) => d ? `${fmtBRL(liquidoDecimo(d))} (${fmtDate(d.data)})` : '-';
+  const body = emps.map(e => {
+    const p1 = decimoDe(e.id, decimoAno, '1'), p2 = decimoDe(e.id, decimoAno, '2'), u = decimoDe(e.id, decimoAno, 'unica');
+    if (p1) t1 += liquidoDecimo(p1);
+    if (p2) t2 += liquidoDecimo(p2);
+    if (u) t2 += liquidoDecimo(u);
+    return [e.name + (e.inativo ? ' (inativo)' : ''), fmtBRL(e.salario), `${avosDecimo(e, decimoAno)}/12`, fmtBRL(previstoDecimo(e, decimoAno)),
+      u ? cel(u) + ' única' : cel(p1), u ? '-' : cel(p2), fmtBRL([p1, p2, u].filter(Boolean).reduce((s, d) => s + liquidoDecimo(d), 0))];
+  });
+  doc.autoTable({
+    startY: 50,
+    head: [['Funcionário','Salário','Avos','13º previsto','1ª parcela (líquido)','2ª parcela (líquido)','Total pago']],
+    body,
+    foot: [['TOTAIS', '', '', '', fmtBRL(t1), fmtBRL(t2), fmtBRL(t1 + t2)]],
+    theme: 'striped', headStyles: { fillColor: [15,61,46] }, footStyles: { fillColor: [255,122,26] }, styles: { fontSize: 8 }
+  });
+  reciboFooter(doc);
+  doc.save(`decimo-terceiro-${decimoAno}.pdf`);
+}
+
+window.decimoForm = decimoForm;
+window.decimoExcluir = decimoExcluir;
+window.gerarReciboDecimo = gerarReciboDecimo;
+window.exportarDecimoPDF = exportarDecimoPDF;
 
 window.feriasForm = feriasForm;
 window.feriasExcluir = feriasExcluir;
@@ -3818,7 +4199,7 @@ function renderFardEntregas() {
 function fardEntregaForm(id=null) {
   if (state.fard_itens.length === 0) { toast('Cadastre itens de fardamento primeiro','warn'); return; }
   if (state.employees.length === 0) { toast('Cadastre funcionários primeiro','warn'); return; }
-  const en = id ? state.fard_entregas.find(x=>x.id===id) : { employeeId: state.employees[0]?.id||'', data: todayISO(), obs:'', itens: [{ itemId: state.fard_itens[0]?.id, tamanho:'', quantidade:1 }] };
+  const en = id ? state.fard_entregas.find(x=>x.id===id) : { employeeId: empsOrdenados()[0]?.id||'', data: todayISO(), obs:'', itens: [{ itemId: state.fard_itens[0]?.id, tamanho:'', quantidade:1 }] };
   if (!en) return;
   // Render do form com lista dinâmica de itens
   const renderItensForm = () => en.itens.map((it, idx) => `
@@ -3845,7 +4226,7 @@ function fardEntregaForm(id=null) {
     title: id ? 'Editar entrega' : 'Nova entrega de fardamento',
     body: `<form id="fardEntregaForm" class="space-y-4">
       <div class="grid sm:grid-cols-2 gap-4">
-        ${fld('Funcionário', `<select name="employeeId" class="${inp()}">${empsOrdenados().map(em=>`<option value="${em.id}" ${em.id===en.employeeId?'selected':''}>${escape(em.name)}</option>`).join('')}</select>`)}
+        ${fld('Funcionário', `<select name="employeeId" class="${inp()}">${empsParaSelecao(en.employeeId).map(em=>`<option value="${em.id}" ${em.id===en.employeeId?'selected':''}>${nomeEmpOpt(em)}</option>`).join('')}</select>`)}
         ${fld('Data', `<input name="data" type="date" value="${en.data}" class="${inp()}">`)}
       </div>
       <div>
@@ -3986,7 +4367,7 @@ function calcResumoMes(mes) {
   let totalSalarios = 0, totalLiquidoPago = 0, totalLiquidoPendente = 0;
   let totalSaidas = 0, totalCom = 0, totalBon = 0;
   const porTipo = {};
-  state.employees.forEach(e => {
+  empsDoMes(mes).forEach(e => {
     totalSalarios += Number(e.salario||0);
     totalCom += totalComissoes(e.id, mes);
     totalBon += totalBonificacoes(e.id, mes);
@@ -4009,7 +4390,7 @@ function calcResumoMes(mes) {
     totalPago: totalSaidas + totalLiquidoPago,
     totalAPagar: totalLiquidoPendente,
     porTipo,
-    empCount: state.employees.length
+    empCount: empsDoMes(mes).length
   };
 }
 
@@ -4049,7 +4430,7 @@ function fecharMesPrompt(mes) {
 
 function confirmarFechamento(mes) {
   // Marca todos como pago
-  state.employees.forEach(e => {
+  empsDoMes(mes).forEach(e => {
     const st = statusPagamento(e.id, mes);
     if (st !== 'pago') setStatusPagamento(e.id, mes, 'pago');
   });
@@ -4102,7 +4483,7 @@ function gerarPDFFechamento(mes) {
   doc.autoTable({
     startY: y,
     head: [['Funcionário','Salário','Saídas','Líquido pago']],
-    body: empsOrdenados().map(e => {
+    body: empsDoMes(mes).map(e => {
       const d = descontosAgregados(e.id, mes);
       const liq = (Number(e.salario)||0) - d.total;
       return [e.name, fmtBRL(e.salario), fmtBRL(d.total), fmtBRL(liq)];
@@ -4270,7 +4651,7 @@ function exportarFolhaPDF() {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape' });
   reciboHeader(doc, `FOLHA DE PAGAMENTO · ${folhaMes}`);
-  const rows = empsOrdenados().map(e => {
+  const rows = empsDoMes(folhaMes).map(e => {
     const d   = descontosAgregados(e.id, folhaMes);
     const com = totalComissoes(e.id, folhaMes);
     const bon = totalBonificacoes(e.id, folhaMes);
@@ -4292,7 +4673,7 @@ function exportarFolhaPDF() {
       st.charAt(0).toUpperCase() + st.slice(1)
     ];
   });
-  const tot = empsOrdenados().reduce((acc, e) => {
+  const tot = empsDoMes(folhaMes).reduce((acc, e) => {
     const d = descontosAgregados(e.id, folhaMes);
     const com = totalComissoes(e.id, folhaMes);
     const bon = totalBonificacoes(e.id, folhaMes);
@@ -4339,7 +4720,7 @@ function exportarFolhaPDF() {
   reciboFooter(doc); doc.save(`folha-${folhaMes}.pdf`);
 }
 function exportarFolhaXLSX() {
-  const rows = empsOrdenados().map(e => {
+  const rows = empsDoMes(folhaMes).map(e => {
     const d   = descontosAgregados(e.id, folhaMes);
     const com = totalComissoes(e.id, folhaMes);
     const bon = totalBonificacoes(e.id, folhaMes);
