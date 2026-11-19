@@ -1041,12 +1041,14 @@ function getLegendColor() { return document.documentElement.classList.contains('
    ========================================================== */
 let empFilter = '';
 let empSituacao = 'ativos';
+let empGrupoFiltro = 'todos';
 function renderFuncionarios() {
   const q = empFilter.toLowerCase();
   const qtdAtivos = state.employees.filter(e => !e.inativo).length;
   const qtdInativos = state.employees.length - qtdAtivos;
   const list = empsTodos().filter(e =>
     (empSituacao === 'todos' || (empSituacao === 'inativos' ? e.inativo : !e.inativo)) &&
+    (empGrupoFiltro === 'todos' || grupoDe(e) === empGrupoFiltro) &&
     (!q || (e.name+' '+e.cargo+' '+e.cpf).toLowerCase().includes(q))
   );
   const chip = (v, txt, n) => `<button onclick="empSituacao='${v}';renderFuncionarios()" class="px-3 py-1.5 rounded-full text-sm font-semibold border ${empSituacao===v ? 'bg-brand-700 text-white border-brand-700' : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'}">${txt} <span class="opacity-70">(${n})</span></button>`;
@@ -1057,13 +1059,21 @@ function renderFuncionarios() {
         <input id="empSearch" value="${escape(empFilter)}" placeholder="Buscar por nome, cargo ou CPF..."
                class="w-full pl-9 pr-3 py-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
       </div>
+      <div class="flex gap-2">
+      <button onclick="escGruposForm()" class="px-4 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-semibold flex items-center justify-center gap-2">
+        <i data-lucide="users" class="w-4 h-4"></i> Grupos
+      </button>
       <button onclick="empForm()" class="px-4 py-2.5 rounded-lg bg-brand-700 hover:bg-brand-800 text-white font-semibold flex items-center justify-center gap-2">
         <i data-lucide="user-plus" class="w-4 h-4"></i> Novo funcionário
       </button>
+      </div>
     </div>
     <div class="flex flex-wrap gap-2 mb-4">
       ${chip('ativos', 'Ativos', qtdAtivos)}${chip('inativos', 'Inativos', qtdInativos)}${chip('todos', 'Todos', state.employees.length)}
     </div>
+    ${(() => { const gs = Array.from(new Set(state.employees.map(grupoDe))).sort((a,b)=>a.localeCompare(b)); if (gs.length <= 1 && !gs[0]) return '';
+      const cg = (v, txt, n) => `<button onclick="empGrupoFiltro='${v}';renderFuncionarios()" class="px-3 py-1 rounded-full text-xs font-semibold border ${empGrupoFiltro===v ? 'bg-violet-600 text-white border-violet-600' : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'}">${txt} <span class="opacity-70">(${n})</span></button>`;
+      return `<div class="flex flex-wrap items-center gap-2 mb-4"><span class="text-xs font-semibold uppercase text-slate-500">Grupo:</span>${cg('todos','Todos',state.employees.length)}${gs.map(g => cg(g, escape(grupoNome(g)), state.employees.filter(e => grupoDe(e)===g).length)).join('')}</div>`; })()}
 
     <div class="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       ${list.length === 0 ? `
@@ -1079,6 +1089,7 @@ function renderFuncionarios() {
             <div class="min-w-0">
               <p class="font-display font-bold truncate text-brand-800 dark:text-white">${escape(e.name)}</p>
               <p class="text-xs text-slate-500 truncate">${escape(e.cargo||'-')}</p>
+              ${grupoDe(e) ? `<span class="inline-block mt-1 mr-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-200">${escape(grupoDe(e))}</span>` : ''}
               ${e.inativo ? `<span class="inline-block mt-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300">Inativo${e.inativoDesde ? ' desde ' + fmtDate(e.inativoDesde) : ''}</span>` : ''}
             </div>
           </div>
@@ -1129,6 +1140,7 @@ function empForm(id=null) {
         ${fld('CPF',           `<input name="cpf" value="${escape(e.cpf)}" class="${inp()}">`)}
         ${fld('Telefone',      `<input name="phone" value="${escape(e.phone)}" class="${inp()}">`)}
         ${fld('Cargo',         `<input name="cargo" value="${escape(e.cargo)}" class="${inp()}">`)}
+        ${fld('Grupo (ex.: Interno, Externo)', `<input name="grupo" list="empGrupos" value="${escape(e.grupo||'')}" placeholder="Interno / Externo" class="${inp()}"><datalist id="empGrupos">${gruposExistentes().map(g => `<option value="${escape(g)}">`).join('')}</datalist>`)}
         ${fld('Data de admissão', `<input name="admissao" type="date" value="${e.admissao||''}" class="${inp()}">`)}
         ${fld('Salário base (R$)', `<input name="salario" type="number" step="0.01" min="0" value="${e.salario||0}" class="${inp()}">`,'sm:col-span-2')}
         <label class="sm:col-span-2 flex items-start gap-3 p-3 rounded-lg border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-900/20 cursor-pointer">
@@ -1157,6 +1169,7 @@ function empForm(id=null) {
     if (!data.name.trim()) { toast('Nome obrigatório', 'error'); return; }
     data.salario = Number(data.salario)||0;
     data.soComissao = document.getElementById('empSoComissao').checked;
+    data.grupo = String(data.grupo || '').trim().toUpperCase();
     data.foto = foto;
     if (id) {
       Object.assign(state.employees.find(x=>x.id===id), data);
@@ -2163,6 +2176,15 @@ const slug = (s) => String(s||'').toLowerCase().normalize('NFD').replace(/[^a-z0
 const cmpNome = (a,b) => String(a?.name||'').localeCompare(String(b?.name||''), 'pt-BR', { sensitivity:'base', ignorePunctuation:true });
 /* Retorna funcionários ordenados alfabeticamente (não muda o array original) */
 const empsTodos = () => state.employees.slice().sort(cmpNome);
+/* Grupos de funcionários (ex.: INTERNO, EXTERNO) — só para organizar escala e relatórios */
+const grupoDe = (e) => String(e?.grupo || '').trim().toUpperCase();
+const GRUPOS_SUGERIDOS = ['INTERNO', 'EXTERNO'];
+function gruposExistentes() {
+  const set = new Set(GRUPOS_SUGERIDOS);
+  state.employees.forEach(e => { if (grupoDe(e)) set.add(grupoDe(e)); });
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+const grupoNome = (g) => g || 'SEM GRUPO';
 // Só ATIVOS (para lançamentos novos e listas do dia a dia)
 const empsOrdenados = () => state.employees.filter(e => !e.inativo).sort(cmpNome);
 // Funcionário entra na folha de um mês se estava ativo nele ou se teve lançamento no mês
@@ -3497,6 +3519,7 @@ const escParse = (iso) => { const [y,m,d] = iso.split('-').map(Number); return n
 const escAddDias = (iso, n) => { const d = escParse(iso); d.setDate(d.getDate()+n); return escIso(d); };
 const escSegunda = (iso) => { const d = escParse(iso); d.setDate(d.getDate() - ((d.getDay()+6)%7)); return escIso(d); };
 let escalaSemana = escSegunda(todayISO());
+let escGrupo = 'todos';
 
 function escalaCfg() {
   if (!state.escala || typeof state.escala !== 'object') state.escala = {};
@@ -3564,7 +3587,10 @@ function renderEscala() {
   const E = escalaCfg(), cfg = E.config;
   const ini = escalaSemana;
   const dias = Array.from({ length: 7 }, (_, i) => escAddDias(ini, i));
-  const emps = escEmps(ini);
+  const todosEmps = escEmps(ini);
+  const gruposEsc = Array.from(new Set(todosEmps.map(grupoDe))).sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)));
+  if (escGrupo !== 'todos' && !gruposEsc.includes(escGrupo)) escGrupo = 'todos';
+  const emps = escGrupo === 'todos' ? todosEmps : todosEmps.filter(e => grupoDe(e) === escGrupo);
   const extrasNec = escFolgasExtras(cfg);
   const semPadrao = emps.filter(e => (E.padrao[e.id]?.folgas || []).filter(d => cfg.diasAbertos.includes(d)).length !== extrasNec);
   const hoje = todayISO();
@@ -3595,11 +3621,19 @@ function renderEscala() {
         <button onclick="escalaSemana=escSegunda(todayISO());renderEscala()" class="px-3 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-sm font-semibold">Hoje</button>
       </div>
       <div class="flex flex-wrap gap-2">
+        <button onclick="escGruposForm()" class="px-3 py-2 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold flex items-center gap-1"><i data-lucide="users" class="w-4 h-4"></i> Grupos</button>
         <button onclick="escGerarAuto()" class="px-3 py-2 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold flex items-center gap-1"><i data-lucide="wand-2" class="w-4 h-4"></i> Gerar folgas automático</button>
         <button onclick="escConfig()" class="px-3 py-2 rounded-lg bg-slate-600 hover:bg-slate-700 text-white text-sm font-semibold flex items-center gap-1"><i data-lucide="settings" class="w-4 h-4"></i> Configurar</button>
         <button onclick="escPDF('semana')" class="px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold flex items-center gap-1"><i data-lucide="printer" class="w-4 h-4"></i> Semana</button>
         <button onclick="escPDF('mes')" class="px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold flex items-center gap-1"><i data-lucide="calendar-days" class="w-4 h-4"></i> Mês</button>
       </div>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      <span class="text-xs font-semibold uppercase text-slate-500">Mostrar:</span>
+      ${[['todos', 'Todos', todosEmps.length], ...gruposEsc.map(g => [g, grupoNome(g), todosEmps.filter(e => grupoDe(e) === g).length])].map(([v, t, n]) =>
+        `<button onclick="escGrupo='${v}';renderEscala()" class="px-3 py-1.5 rounded-full text-sm font-semibold border ${escGrupo === v ? 'bg-violet-600 text-white border-violet-600' : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'}">${escape(t)} <span class="opacity-70">(${n})</span></button>`).join('')}
+      ${gruposEsc.length <= 1 && !gruposEsc[0] ? `<span class="text-xs text-slate-500">— clique em <b>Grupos</b> para separar Interno / Externo</span>` : ''}
     </div>
 
     ${semPadrao.length ? `<div class="mb-4 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 p-3 text-sm text-amber-800 dark:text-amber-200">
@@ -3616,7 +3650,8 @@ function renderEscala() {
             <th class="px-2 py-2 text-center">Dias</th>
           </tr></thead>
           <tbody>
-            ${emps.length === 0 ? `<tr><td colspan="9" class="text-center py-10 text-slate-500">Nenhum funcionário na escala.</td></tr>` : emps.map(e => {
+            ${emps.length === 0 ? `<tr><td colspan="9" class="text-center py-10 text-slate-500">Nenhum funcionário na escala${escGrupo !== 'todos' ? ' neste grupo' : ''}.</td></tr>` : (() => {
+              const linhaEmp = (e) => {
               const trab = dias.filter(iso => escStatus(e, iso) === 'T').length;
               const temFerias = dias.some(iso => ['FE','I'].includes(escStatus(e, iso)));
               const ok = trab === 5 || temFerias;
@@ -3626,10 +3661,20 @@ function renderEscala() {
                   <div class="text-[10px] text-slate-500">${escape(e.cargo||'')}${(E.padrao[e.id]?.folgas||[]).length ? ' · folga ' + (E.padrao[e.id].folgas).map(d => DIAS_CURTO[d]).join('/') + (cfg.rodizio ? ' (rodízio)' : '') : ''}</div></button></td>
                 ${dias.map(iso => celula(e, iso)).join('')}
                 <td class="px-2 text-center"><span class="px-2 py-1 rounded-full text-xs font-bold ${ok ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'}">${trab}${ok ? '' : ' ⚠️'}</span></td>
-              </tr>`; }).join('')}
+              </tr>`; };
+              const secoes = escGrupo === 'todos' && gruposEsc.length > 1 ? gruposEsc : [null];
+              return secoes.map(g => {
+                const lista = g === null ? emps : emps.filter(e => grupoDe(e) === g);
+                if (g === null) return lista.map(linhaEmp).join('');
+                const cont = dias.map(iso => lista.filter(e => escStatus(e, iso) === 'T').length);
+                return `<tr class="bg-violet-50 dark:bg-violet-900/20"><td colspan="9" class="px-3 py-1.5 text-xs font-bold text-violet-800 dark:text-violet-200 uppercase">👥 ${escape(grupoNome(g))} <span class="font-normal normal-case">(${lista.length})</span></td></tr>`
+                  + lista.map(linhaEmp).join('')
+                  + `<tr class="text-[11px] text-violet-700 dark:text-violet-300 border-b-2 border-violet-200 dark:border-violet-800"><td class="px-3 py-1 font-semibold">Trabalhando — ${escape(grupoNome(g))}</td>${cont.map(n => `<td class="text-center font-bold">${n}</td>`).join('')}<td></td></tr>`;
+              }).join('');
+            })()}
           </tbody>
           <tfoot><tr class="bg-slate-50 dark:bg-slate-800 text-xs font-bold">
-            <td class="px-3 py-2">Trabalhando no dia</td>
+            <td class="px-3 py-2">Trabalhando no dia${escGrupo !== 'todos' ? ' — ' + escape(grupoNome(escGrupo)) : ' (total)'}</td>
             ${dias.map((iso, i) => { const dow = escParse(iso).getDay(); const aberto = cfg.diasAbertos.includes(dow); const baixo = aberto && cfg.minimo > 0 && porDia[i] < cfg.minimo;
               return `<td class="text-center py-2 ${baixo ? 'text-red-600' : ''}">${aberto || porDia[i] ? porDia[i] : '-'}${baixo ? ` ⚠️<div class="font-normal text-[10px]">mín. ${cfg.minimo}</div>` : ''}</td>`; }).join('')}
             <td></td>
@@ -3648,13 +3693,17 @@ function renderEscala() {
 function escGerarAuto() {
   const E = escalaCfg(), cfg = E.config;
   const extras = escFolgasExtras(cfg);
-  const emps = empsOrdenados().filter(e => escParticipa(e.id));
+  const emps = empsOrdenados().filter(e => escParticipa(e.id) && (escGrupo === 'todos' || grupoDe(e) === escGrupo));
   if (!emps.length) { toast('Nenhum funcionário ativo na escala', 'warn'); return; }
   const abertos = escAbertosOrdem(cfg).filter(d => d !== 0 || cfg.diasAbertos.length === 7);
   const lista = abertos.length ? abertos : escAbertosOrdem(cfg);
-  confirmAction(`Gerar as folgas de ${emps.length} funcionário(s) distribuindo igualmente nos dias (${extras} folga(s) extra por pessoa, além dos dias fechados)? Isso troca as folgas padrão atuais. Os ajustes de dias específicos continuam.`, () => {
-    const cont = Object.fromEntries(lista.map(d => [d, 0]));
-    emps.forEach((e, i) => {
+  confirmAction(`${escGrupo !== 'todos' ? 'Grupo ' + grupoNome(escGrupo) + ': ' : ''}Gerar as folgas de ${emps.length} funcionário(s) distribuindo igualmente nos dias${escGrupo === 'todos' ? ' (equilibra dentro de cada grupo)' : ''} (${extras} folga(s) extra por pessoa, além dos dias fechados)? Isso troca as folgas padrão atuais. Os ajustes de dias específicos continuam.`, () => {
+    const contPorGrupo = {};
+    const idxPorGrupo = {};
+    emps.forEach((e) => {
+      const g = grupoDe(e);
+      const cont = contPorGrupo[g] = contPorGrupo[g] || Object.fromEntries(lista.map(d => [d, 0]));
+      const i = idxPorGrupo[g] = (idxPorGrupo[g] ?? -1) + 1;
       const escolhidas = [];
       for (let k = 0; k < extras; k++) {
         const ordem = lista.slice(i % lista.length).concat(lista.slice(0, i % lista.length));
@@ -3758,14 +3807,25 @@ function escPDF(tipo) {
     dias = Array.from({ length: 7 }, (_, i) => escAddDias(escalaSemana, i));
     titulo = `ESCALA 5x2 · SEMANA ${fmtDate(dias[0])} A ${fmtDate(dias[6])}`;
   }
-  const emps = escEmps(dias[0]);
+  const todosPdf = escEmps(dias[0]);
+  const emps = (escGrupo === 'todos' ? todosPdf : todosPdf.filter(e => grupoDe(e) === escGrupo))
+    .sort((a, b) => grupoDe(a).localeCompare(grupoDe(b)) || cmpNome(a, b));
+  if (escGrupo !== 'todos') titulo += ' · ' + grupoNome(escGrupo);
   const sig = { T: tipo === 'mes' ? 'T' : 'Trabalha', F: 'FOLGA', X: '-', FE: 'FÉRIAS', I: '' };
   const sigMes = { T: 'T', F: 'F', X: '-', FE: 'FE', I: '' };
   const mapa = tipo === 'mes' ? sigMes : sig;
   reciboHeader(doc, titulo);
   const head = [['Funcionário', ...dias.map(iso => tipo === 'mes' ? `${DIAS_CURTO[escParse(iso).getDay()][0]}\n${iso.slice(8)}` : `${DIAS_CURTO[escParse(iso).getDay()]} ${fmtDate(iso).slice(0,5)}`)]];
-  const body = emps.map(e => [e.name, ...dias.map(iso => mapa[escStatus(e, iso)])]);
-  body.push(['Trabalhando', ...dias.map(iso => String(emps.filter(e => escStatus(e, iso) === 'T').length))]);
+  const body = [];
+  const gruposPdf = Array.from(new Set(emps.map(grupoDe)));
+  const separar = escGrupo === 'todos' && gruposPdf.length > 1;
+  gruposPdf.forEach(g => {
+    const lista = emps.filter(e => grupoDe(e) === g);
+    if (separar) body.push([{ content: grupoNome(g) + ` (${lista.length})`, colSpan: dias.length + 1, styles: { fillColor: [237, 233, 254], fontStyle: 'bold', halign: 'left' } }]);
+    lista.forEach(e => body.push([e.name, ...dias.map(iso => mapa[escStatus(e, iso)])]));
+    if (separar) body.push(['Trabalhando — ' + grupoNome(g), ...dias.map(iso => String(lista.filter(e => escStatus(e, iso) === 'T').length))]);
+  });
+  body.push([separar ? 'Trabalhando (total)' : 'Trabalhando', ...dias.map(iso => String(emps.filter(e => escStatus(e, iso) === 'T').length))]);
   doc.autoTable({
     startY: 50, head, body, theme: 'grid',
     headStyles: { fillColor: [15,61,46], fontSize: tipo === 'mes' ? 6 : 8, halign: 'center' },
@@ -3777,7 +3837,7 @@ function escPDF(tipo) {
       if (v === 'FOLGA' || v === 'F') h.cell.styles.fillColor = [254, 243, 199];
       else if (v === 'FÉRIAS' || v === 'FE') h.cell.styles.fillColor = [224, 242, 254];
       else if (v === '-') h.cell.styles.fillColor = [241, 245, 249];
-      if (h.row.index === body.length - 1) h.cell.styles.fontStyle = 'bold';
+      if (String(h.row.raw?.[0] || '').startsWith('Trabalhando')) h.cell.styles.fontStyle = 'bold';
     },
     margin: { left: 8, right: 8 }
   });
@@ -3786,9 +3846,61 @@ function escPDF(tipo) {
   const hs = [cfg.horarioSemana && `Seg a sex: ${cfg.horarioSemana}`, cfg.horarioSabado && `Sábado: ${cfg.horarioSabado}`, cfg.horarioDomingo && `Domingo: ${cfg.horarioDomingo}`].filter(Boolean).join('   ·   ');
   doc.text((tipo === 'mes' ? 'T = trabalha   F = folga   FE = férias   - = fechado' : '') + (hs ? (tipo === 'mes' ? '      ' : '') + 'Horários: ' + hs : ''), 8, yFim);
   reciboFooter(doc);
-  doc.save(`escala-${tipo}-${dias[0]}.pdf`);
+  doc.save(`escala-${tipo}-${dias[0]}${escGrupo !== 'todos' ? '-' + slug(grupoNome(escGrupo)) : ''}.pdf`);
 }
 
+function escGruposForm() {
+  const emps = empsOrdenados();
+  const gs = gruposExistentes();
+  const opts = (atual) => `<option value="">— sem grupo —</option>` + gs.map(g => `<option value="${escape(g)}" ${g === atual ? 'selected' : ''}>${escape(g)}</option>`).join('');
+  openModal({
+    title: 'Grupos de funcionários',
+    body: `
+      <p class="text-sm text-slate-600 dark:text-slate-300 mb-3">Separe quem é <b>Interno</b> e <b>Externo</b> (ou crie outros grupos). Serve para filtrar a escala e os relatórios — não muda a folha.</p>
+      <div class="flex gap-2 mb-4">
+        <input id="grpNovo" placeholder="Criar grupo novo (ex.: MOTORISTAS)" class="${inp()}">
+        <button type="button" id="grpAdd" class="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold whitespace-nowrap">+ Criar</button>
+      </div>
+      <div class="flex flex-wrap gap-2 mb-3 text-xs" id="grpRapido">
+        <span class="text-slate-500 self-center">Marcar todos como:</span>
+        ${gs.map(g => `<button type="button" data-g="${escape(g)}" class="grpTodos px-2 py-1 rounded bg-slate-200 dark:bg-slate-700 font-semibold">${escape(g)}</button>`).join('')}
+      </div>
+      <div class="space-y-1 max-h-[50vh] overflow-y-auto">
+        ${emps.map(e => `<div class="flex items-center justify-between gap-2 py-1 border-b border-slate-100 dark:border-slate-800">
+          <div class="min-w-0"><div class="text-sm font-semibold truncate">${escape(e.name)}</div><div class="text-[11px] text-slate-500">${escape(e.cargo||'')}</div></div>
+          <select data-emp="${e.id}" class="grpSel ${inp()} !w-40">${opts(grupoDe(e))}</select>
+        </div>`).join('')}
+      </div>
+    `,
+    footer: `
+      <button class="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-sm font-semibold" onclick="closeModal()">Cancelar</button>
+      <button id="grpOk" class="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold">Salvar</button>
+    `
+  });
+  document.getElementById('grpAdd').addEventListener('click', () => {
+    const g = document.getElementById('grpNovo').value.trim().toUpperCase();
+    if (!g) return;
+    document.querySelectorAll('.grpSel').forEach(sel => { if (![...sel.options].some(o => o.value === g)) sel.add(new Option(g, g)); });
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'grpTodos px-2 py-1 rounded bg-slate-200 dark:bg-slate-700 font-semibold'; b.dataset.g = g; b.textContent = g;
+    document.getElementById('grpRapido').appendChild(b);
+    document.getElementById('grpNovo').value = '';
+    toast(`Grupo ${g} criado — escolha nas pessoas`, 'info');
+  });
+  document.getElementById('grpRapido').addEventListener('click', (ev) => {
+    const g = ev.target?.dataset?.g; if (!g) return;
+    document.querySelectorAll('.grpSel').forEach(sel => sel.value = g);
+  });
+  document.getElementById('grpOk').addEventListener('click', () => {
+    document.querySelectorAll('.grpSel').forEach(sel => {
+      const e = state.employees.find(x => x.id === sel.dataset.emp);
+      if (e) e.grupo = sel.value;
+    });
+    persist(); closeModal();
+    if (location.hash === '#/funcionarios') renderFuncionarios(); else renderEscala();
+    toast('Grupos salvos', 'success');
+  });
+}
+window.escGruposForm = escGruposForm;
 window.escClicar = escClicar;
 window.escGerarAuto = escGerarAuto;
 window.escFolgasForm = escFolgasForm;
