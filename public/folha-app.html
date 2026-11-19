@@ -293,6 +293,7 @@ const defaultState = () => ({
   comissoes: [],       // {id, employeeId, data, tipo, valor, obs, quantidade?, valorUnitario?, base?, percentual?, descricao?}
   bonificacoes: [],    // {id, employeeId, data, valor, motivo, obs}
   ferias: [],          // {id, employeeId, dataPagamento, periodoInicio, periodoFim, valorFerias, valorTerco, obs}
+  decimoFechados: {},  // { '2026': { em, por } } — 13º do ano travado
   decimo: [],          // {id, employeeId, ano, parcela ('1'|'2'|'unica'), data, avos, valorBruto, adiantamento, inss, outros, outrosDesc, obs}
   cheques: [],         // {id, numero, banco, agencia, conta, valor, dataEmissao, dataVencimento, emitenteNome, emitenteCpf, motivoDevolucao, obs, status, entregas:[{id, data, tipoPessoa, employeeId?, nome, cpf, motivo, obs}], quitacao?:{data, forma, obs}}
   fechamentos: [],     // {id, mes, dataFechamento, totalSalarios, totalSaidas, totalLiquidoPago, totalGeral, empCount, snapshot}
@@ -696,11 +697,17 @@ function bonificacoesDoMes(employeeId, mes) {
 function totalBonificacoes(employeeId, mes) {
   return bonificacoesDoMes(employeeId, mes).reduce((a,b)=>a + Number(b.valor||0), 0);
 }
+/* Salário que entra na FOLHA.
+   Funcionário marcado "só comissão + bonificação": o salário base fica no cadastro
+   apenas para 13º e férias — na folha entra R$ 0. */
+const salarioFolha = (emp) => (emp && emp.soComissao) ? 0 : (Number(emp?.salario) || 0);
+// Quanto falta para chegar no salário base (para completar com bonificação)
+const faltaParaBase = (emp, com, bon) => (emp && emp.soComissao) ? Math.max(0, Math.round(((Number(emp.salario)||0) - com - bon) * 100) / 100) : 0;
 function calcLiquido(emp, mes) {
   const d = descontosAgregados(emp.id, mes);
   const c = totalComissoes(emp.id, mes);
   const b = totalBonificacoes(emp.id, mes);
-  return Number(emp.salario||0) + c + b - d.total;
+  return salarioFolha(emp) + c + b - d.total;
 }
 function statusPagamento(employeeId, mes) {
   const p = state.pagamentos.find(p => p.employeeId === employeeId && p.mes === mes);
@@ -712,12 +719,12 @@ function setStatusPagamento(employeeId, mes, status) {
   const d   = descontosAgregados(employeeId, mes);
   const com = totalComissoes(employeeId, mes);
   const bon = totalBonificacoes(employeeId, mes);
-  const liq = (emp?.salario||0) + com + bon - d.total;
+  const liq = salarioFolha(emp) + com + bon - d.total;
   const obj = {
     id: idx >= 0 ? state.pagamentos[idx].id : uid(),
     employeeId, mes, status,
     dataPagamento: status === 'pago' ? todayISO() : (state.pagamentos[idx]?.dataPagamento || null),
-    salario: emp?.salario || 0,
+    salario: salarioFolha(emp),
     comissoes: com,
     bonificacoes: bon,
     descontos: d.total,
@@ -768,7 +775,7 @@ function quitarMesForm(employeeId, mes) {
   const d = descontosAgregados(employeeId, mes);
   const com = totalComissoes(employeeId, mes);
   const bon = totalBonificacoes(employeeId, mes);
-  const liq = (Number(emp.salario)||0) + com + bon - d.total;
+  const liq = salarioFolha(emp) + com + bon - d.total;
 
   const rotuloTipo = (t) => tipoLabel(t);
 
@@ -779,7 +786,7 @@ function quitarMesForm(employeeId, mes) {
         <div class="bg-brand-50 dark:bg-brand-900/30 border border-brand-200 dark:border-brand-800 rounded-xl p-3">
           <div class="text-xs uppercase font-semibold text-brand-800 dark:text-brand-200 mb-2">Cálculo do mês ${mes}</div>
           <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
-            <span class="text-slate-600 dark:text-slate-300">Salário base:</span><span class="text-right font-mono">${fmtBRL(emp.salario||0)}</span>
+            <span class="text-slate-600 dark:text-slate-300">Salário base:</span><span class="text-right font-mono">${emp.soComissao ? '<span class="text-xs text-violet-600">só comissão</span>' : fmtBRL(emp.salario||0)}</span>
             ${com ? `<span class="text-emerald-700 dark:text-emerald-300">+ Comissão:</span><span class="text-right font-mono text-emerald-700 dark:text-emerald-300">+ ${fmtBRL(com)}</span>` : ''}
             ${bon ? `<span class="text-emerald-700 dark:text-emerald-300">+ Bonificação:</span><span class="text-right font-mono text-emerald-700 dark:text-emerald-300">+ ${fmtBRL(bon)}</span>` : ''}
             ${d.quinzena ? `<span class="text-slate-600 dark:text-slate-300">− Quinzena:</span><span class="text-right font-mono text-red-600">− ${fmtBRL(d.quinzena)}</span>` : ''}
@@ -903,7 +910,7 @@ function renderDashboard() {
   let totalAdto = 0, totalGas = 0;
 
   empsDoMes(mes).forEach(e => {
-    totalSalarios += Number(e.salario||0);
+    totalSalarios += salarioFolha(e);
     const liq = calcLiquido(e, mes); // salário - saídas do mês
     const st = statusPagamento(e.id, mes);
     if (st === 'pago')        totalLiquidoPago += liq;
@@ -1075,7 +1082,7 @@ function renderFuncionarios() {
             <p class="flex items-center gap-2"><i data-lucide="calendar" class="w-3.5 h-3.5"></i> Admissão: ${fmtDate(e.admissao)}</p>
           </div>
           <div class="mt-3 flex items-center justify-between">
-            <span class="font-display text-base font-bold text-brand-700 dark:text-brand-300">${fmtBRL(e.salario)}</span>
+            <span class="font-display text-base font-bold text-brand-700 dark:text-brand-300">${fmtBRL(e.salario)}${e.soComissao ? '<span class="block text-[10px] font-sans font-semibold text-violet-600 dark:text-violet-300">só comissão (base p/ 13º)</span>' : ''}</span>
             <div class="flex items-center gap-1">
               <button onclick="empForm('${e.id}')" class="p-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800" title="Editar"><i data-lucide="pencil" class="w-4 h-4"></i></button>
               ${e.inativo
@@ -1118,6 +1125,11 @@ function empForm(id=null) {
         ${fld('Cargo',         `<input name="cargo" value="${escape(e.cargo)}" class="${inp()}">`)}
         ${fld('Data de admissão', `<input name="admissao" type="date" value="${e.admissao||''}" class="${inp()}">`)}
         ${fld('Salário base (R$)', `<input name="salario" type="number" step="0.01" min="0" value="${e.salario||0}" class="${inp()}">`,'sm:col-span-2')}
+        <label class="sm:col-span-2 flex items-start gap-3 p-3 rounded-lg border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-900/20 cursor-pointer">
+          <input id="empSoComissao" type="checkbox" ${e.soComissao ? 'checked' : ''} class="mt-1 w-4 h-4 accent-violet-600">
+          <span class="text-sm text-violet-900 dark:text-violet-100"><b>Na folha, recebe só comissão + bonificação</b>
+            <span class="block text-xs text-violet-700 dark:text-violet-300">O salário base acima NÃO entra na folha — fica guardado só para o 13º e férias. A folha avisa quanto falta para chegar no salário base.</span></span>
+        </label>
         ${fld('Observações',   `<textarea name="obs" rows="3" class="${inp()}">${escape(e.obs)}</textarea>`,'sm:col-span-2')}
       </form>
     `,
@@ -1138,6 +1150,7 @@ function empForm(id=null) {
     const data = Object.fromEntries(fd.entries());
     if (!data.name.trim()) { toast('Nome obrigatório', 'error'); return; }
     data.salario = Number(data.salario)||0;
+    data.soComissao = document.getElementById('empSoComissao').checked;
     data.foto = foto;
     if (id) {
       Object.assign(state.employees.find(x=>x.id===id), data);
@@ -1220,14 +1233,14 @@ function renderFolha() {
       const d = descontosAgregados(e.id, folhaMes);
       const com = totalComissoes(e.id, folhaMes);
       const bon = totalBonificacoes(e.id, folhaMes);
-      const liq = (Number(e.salario)||0) + com + bon - d.total;
+      const liq = salarioFolha(e) + com + bon - d.total;
       const st  = statusPagamento(e.id, folhaMes);
       return { e, d, com, bon, liq, st };
     })
     .filter(r => folhaStatus === 'todos' ? true : r.st === folhaStatus);
 
   const totals = rows.reduce((acc, r) => {
-    acc.salario     += Number(r.e.salario)||0;
+    acc.salario     += salarioFolha(r.e);
     acc.comissao    += r.com;
     acc.bonus       += r.bon;
     acc.quinzena    += r.d.quinzena;
@@ -1299,7 +1312,9 @@ function renderFolha() {
               return `
               <tr class="${rowBg} hover:bg-slate-50 dark:hover:bg-slate-800/60">
                 <td class="px-3 py-2.5 font-medium text-brand-800 dark:text-white whitespace-nowrap">${escape(r.e.name)}<div class="text-[11px] text-slate-500 font-normal">${escape(r.e.cargo||'')}</div></td>
-                <td class="px-3 py-2.5 text-right font-mono">${fmtBRL(r.e.salario)}</td>
+                <td class="px-3 py-2.5 text-right font-mono">${r.e.soComissao
+                  ? `<span class="text-slate-400">-</span><div class="text-[10px] font-sans text-violet-600 dark:text-violet-300 whitespace-nowrap">só comissão · base ${fmtBRL(r.e.salario)}</div>${faltaParaBase(r.e, r.com, r.bon) > 0 ? `<div class="text-[10px] font-sans text-amber-600 font-semibold whitespace-nowrap">falta ${fmtBRL(faltaParaBase(r.e, r.com, r.bon))} p/ base</div>` : ''}`
+                  : fmtBRL(r.e.salario)}</td>
                 <td class="px-3 py-2.5 text-right font-mono ${r.com ? 'text-emerald-700 dark:text-emerald-300 font-semibold' : ''}">${r.com ? '+ '+fmtBRL(r.com) : '-'}</td>
                 <td class="px-3 py-2.5 text-right font-mono ${r.bon ? 'text-emerald-700 dark:text-emerald-300 font-semibold' : ''}">${r.bon ? '+ '+fmtBRL(r.bon) : '-'}</td>
                 <td class="px-3 py-2.5 text-right font-mono">${r.d.quinzena ? fmtBRL(r.d.quinzena) : '-'}</td>
@@ -1900,9 +1915,9 @@ function gerarReciboPagamento(empId, mes) {
   const d   = descontosAgregados(empId, mes);
   const com = totalComissoes(empId, mes);
   const bon = totalBonificacoes(empId, mes);
-  const liq = Number(emp.salario||0) + com + bon - d.total;
+  const liq = salarioFolha(emp) + com + bon - d.total;
 
-  const body = [['Salário base', '+ ' + fmtBRL(emp.salario)]];
+  const body = emp.soComissao ? [] : [['Salário base', '+ ' + fmtBRL(emp.salario)]];
   if (com)              body.push(['Comissões', '+ ' + fmtBRL(com)]);
   if (bon)              body.push(['Bonificações', '+ ' + fmtBRL(bon)]);
   if (d.quinzena)       body.push(['Quinzena', '- ' + fmtBRL(d.quinzena)]);
@@ -3128,8 +3143,31 @@ function avosDecimo(e, ano) {
 const previstoDecimo = (e, ano, avos) => Math.round((Number(e.salario)||0) * (avos ?? avosDecimo(e, ano)) / 12 * 100) / 100;
 const decimoDe = (empId, ano, parcela) => state.decimo.find(d => d.employeeId === empId && String(d.ano) === String(ano) && d.parcela === parcela);
 
+const decimoFechado = (ano) => (state.decimoFechados || {})[String(ano)] || null;
+function fecharDecimo(ano) {
+  const emps = empsTodos().filter(e => !e.inativo && avosDecimo(e, ano) > 0);
+  const falta = emps.filter(e => !decimoDe(e.id, ano, 'unica') && (!decimoDe(e.id, ano, '1') || !decimoDe(e.id, ano, '2')));
+  const aviso = falta.length ? `<br><br><b class="text-amber-600">Atenção:</b> ${falta.length} funcionário(s) ainda sem as duas parcelas: ${falta.slice(0, 8).map(e => escape(e.name)).join(', ')}${falta.length > 8 ? '…' : ''}.` : '';
+  confirmAction(`Fechar o 13º de ${ano}? Depois de fechado, ninguém consegue lançar, editar ou excluir parcelas de ${ano} (dá para reabrir).${aviso}`, () => {
+    let por = '';
+    try { por = JSON.parse(localStorage.getItem('caixafacil_usuario_logado'))?.nome || ''; } catch(e) {}
+    state.decimoFechados = { ...(state.decimoFechados || {}), [String(ano)]: { em: new Date().toISOString(), por } };
+    persist(); renderDecimo(); toast(`13º de ${ano} fechado`, 'success');
+  });
+}
+function reabrirDecimo(ano) {
+  confirmAction(`Reabrir o 13º de ${ano}? Volta a permitir lançar, editar e excluir.`, () => {
+    const f = { ...(state.decimoFechados || {}) }; delete f[String(ano)];
+    state.decimoFechados = f;
+    persist(); renderDecimo(); toast(`13º de ${ano} reaberto`, 'success');
+  });
+}
+window.fecharDecimo = fecharDecimo;
+window.reabrirDecimo = reabrirDecimo;
+
 function renderDecimo() {
   if (!Array.isArray(state.decimo)) state.decimo = [];
+  const fechado = decimoFechado(decimoAno);
   const anosSet = new Set(state.decimo.map(d => String(d.ano)));
   const atual = new Date().getFullYear();
   [atual - 1, atual, atual + 1].forEach(a => anosSet.add(String(a)));
@@ -3153,6 +3191,7 @@ function renderDecimo() {
       ? `<div class="text-xs"><b class="text-emerald-700 dark:text-emerald-300">${fmtBRL(liquidoDecimo(unica))}</b> <span class="text-slate-500">única · ${fmtDate(unica.data)}</span>
            <div class="flex gap-1 mt-1">${botoesDecimo(unica)}</div></div>`
       : `<span class="text-xs text-slate-400">— (parcela única)</span>`;
+    if (!d && fechado) return `<span class="text-xs text-slate-400">— não lançado</span>`;
     if (!d) return `<button onclick="decimoForm(null,'${e.id}','${parc}')" class="px-2.5 py-1.5 rounded-md ${parc==='1'?'bg-sky-600 hover:bg-sky-700':'bg-violet-600 hover:bg-violet-700'} text-white text-xs font-semibold flex items-center gap-1"><i data-lucide="plus" class="w-3.5 h-3.5"></i> Lançar ${parc}ª</button>`;
     return `<div class="text-xs"><b class="text-emerald-700 dark:text-emerald-300">${fmtBRL(liquidoDecimo(d))}</b> <span class="text-slate-500">· ${fmtDate(d.data)}</span>
       <div class="flex gap-1 mt-1">${botoesDecimo(d)}</div></div>`;
@@ -3162,6 +3201,11 @@ function renderDecimo() {
     <div class="mb-4 rounded-xl border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-900/20 p-3 text-xs text-violet-800 dark:text-violet-200">
       🎁 O 13º é um pagamento <b>separado</b>: não entra na Folha de Pagamento, no Dashboard nem no Fechamento do mês.
     </div>
+    ${fechado ? `
+    <div class="mb-4 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-100 dark:bg-slate-800 p-3 flex flex-wrap items-center justify-between gap-2">
+      <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">🔒 13º de ${decimoAno} FECHADO em ${fmtDate(fechado.em.slice(0,10))}${fechado.por ? ' por ' + escape(fechado.por) : ''} — só consulta e recibos.</span>
+      <button onclick="reabrirDecimo('${decimoAno}')" class="px-3 py-1.5 rounded-lg bg-slate-600 hover:bg-slate-700 text-white text-xs font-semibold">🔓 Reabrir</button>
+    </div>` : ''}
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
       <div class="rounded-2xl p-4 bg-gradient-to-br from-sky-600 to-sky-800 text-white shadow-lg"><p class="text-xs uppercase tracking-wider opacity-80">1ª parcela (${decimoAno})</p><p class="font-display text-xl sm:text-2xl font-bold mt-1">${fmtBRL(tot1)}</p></div>
       <div class="rounded-2xl p-4 bg-gradient-to-br from-violet-600 to-violet-800 text-white shadow-lg"><p class="text-xs uppercase tracking-wider opacity-80">2ª parcela (${decimoAno})</p><p class="font-display text-xl sm:text-2xl font-bold mt-1">${fmtBRL(tot2)}</p></div>
@@ -3177,7 +3221,8 @@ function renderDecimo() {
           <label class="block sm:col-span-2"><span class="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Funcionário</span>
             <select id="decFuncSel" class="${inp()} mt-1"><option value="todos">Todos</option>${empsTodos().map(e=>`<option value="${e.id}" ${decimoFunc===e.id?'selected':''}>${nomeEmpOpt(e)}</option>`).join('')}</select></label>
           <div class="flex items-end gap-2">
-            <button onclick="decimoForm()" class="flex-1 px-3 py-2.5 rounded-lg bg-brand-700 hover:bg-brand-800 text-white font-semibold flex items-center justify-center gap-2 text-sm"><i data-lucide="plus" class="w-4 h-4"></i> Novo</button>
+            ${fechado ? '' : `<button onclick="decimoForm()" class="flex-1 px-3 py-2.5 rounded-lg bg-brand-700 hover:bg-brand-800 text-white font-semibold flex items-center justify-center gap-2 text-sm"><i data-lucide="plus" class="w-4 h-4"></i> Novo</button>
+            <button onclick="fecharDecimo('${decimoAno}')" class="px-3 py-2.5 rounded-lg bg-slate-600 hover:bg-slate-700 text-white font-semibold flex items-center gap-1 text-sm" title="Fechar o 13º deste ano"><i data-lucide="lock" class="w-4 h-4"></i> Fechar ${decimoAno}</button>`}
             <button onclick="exportarDecimoPDF()" class="px-3 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold flex items-center gap-1 text-sm" title="Relatório do ano em PDF"><i data-lucide="file-down" class="w-4 h-4"></i> PDF</button>
           </div>
         </div>
@@ -3225,6 +3270,7 @@ function renderDecimo() {
 }
 
 function botoesDecimo(d) {
+  if (decimoFechado(d.ano)) return `<button onclick="gerarReciboDecimo('${d.id}')" class="px-2 py-1 rounded bg-brand-50 dark:bg-brand-900/40 text-brand-700 dark:text-brand-200 text-[11px] font-semibold" title="Recibo"><i data-lucide="file-text" class="w-3.5 h-3.5 inline"></i> Recibo</button>`;
   return `<button onclick="gerarReciboDecimo('${d.id}')" class="px-2 py-1 rounded bg-brand-50 dark:bg-brand-900/40 text-brand-700 dark:text-brand-200 text-[11px] font-semibold" title="Recibo"><i data-lucide="file-text" class="w-3.5 h-3.5 inline"></i> Recibo</button>
     <button onclick="decimoForm('${d.id}')" class="px-2 py-1 rounded bg-slate-200 dark:bg-slate-700 text-[11px] font-semibold" title="Editar"><i data-lucide="pencil" class="w-3.5 h-3.5 inline"></i></button>
     <button onclick="decimoExcluir('${d.id}')" class="px-2 py-1 rounded bg-red-600 hover:bg-red-700 text-white text-[11px] font-semibold" title="Excluir"><i data-lucide="trash-2" class="w-3.5 h-3.5 inline"></i></button>`;
@@ -3241,6 +3287,8 @@ function sugestaoDecimo(empId, ano, parcela, avos, ignorarId) {
 }
 
 function decimoForm(id = null, empId = null, parcela = null) {
+  const anoAlvo = id ? state.decimo.find(x => x.id === id)?.ano : decimoAno;
+  if (decimoFechado(anoAlvo)) { toast(`13º de ${anoAlvo} está fechado. Reabra para alterar.`, 'error'); return; }
   if (empsOrdenados().length === 0 && !id) { toast('Cadastre funcionários primeiro','warn'); return; }
   if (!Array.isArray(state.decimo)) state.decimo = [];
   const ano = decimoAno;
@@ -3322,6 +3370,7 @@ function decimoForm(id = null, empId = null, parcela = null) {
   $('decSave').addEventListener('click', () => {
     const data = Object.fromEntries(new FormData($('decForm')).entries());
     data.ano = String(data.ano);
+    if (decimoFechado(data.ano)) { toast(`13º de ${data.ano} está fechado`, 'error'); return; }
     data.avos = Number(data.avos) || 0;
     ['valorBruto','adiantamento','inss','outros'].forEach(k => data[k] = Math.round((Number(data[k])||0) * 100) / 100);
     if (data.parcela !== '2') data.adiantamento = 0;
@@ -3339,6 +3388,7 @@ function decimoForm(id = null, empId = null, parcela = null) {
 
 function decimoExcluir(id) {
   const d = state.decimo.find(x => x.id === id); if (!d) return;
+  if (decimoFechado(d.ano)) { toast(`13º de ${d.ano} está fechado`, 'error'); return; }
   const e = state.employees.find(x => x.id === d.employeeId);
   confirmAction(`Excluir a ${PARCELA_TXT[d.parcela]} do 13º/${d.ano} de ${e?.name || 'funcionário'}?`, () => {
     state.decimo = state.decimo.filter(x => x.id !== id);
@@ -4379,7 +4429,7 @@ function calcResumoMes(mes) {
   let totalSaidas = 0, totalCom = 0, totalBon = 0;
   const porTipo = {};
   empsDoMes(mes).forEach(e => {
-    totalSalarios += Number(e.salario||0);
+    totalSalarios += salarioFolha(e);
     totalCom += totalComissoes(e.id, mes);
     totalBon += totalBonificacoes(e.id, mes);
     const liq = calcLiquido(e, mes);
@@ -4496,8 +4546,8 @@ function gerarPDFFechamento(mes) {
     head: [['Funcionário','Salário','Saídas','Líquido pago']],
     body: empsDoMes(mes).map(e => {
       const d = descontosAgregados(e.id, mes);
-      const liq = (Number(e.salario)||0) - d.total;
-      return [e.name, fmtBRL(e.salario), fmtBRL(d.total), fmtBRL(liq)];
+      const liq = salarioFolha(e) - d.total;
+      return [e.name, fmtBRL(salarioFolha(e)), fmtBRL(d.total), fmtBRL(liq)];
     }),
     foot: [['TOTAIS', fmtBRL(r.totalSalarios), fmtBRL(r.totalSaidas), fmtBRL(r.totalSalarios - r.totalSaidas)]],
     theme: 'grid', headStyles: { fillColor: [15,61,46] },
@@ -4668,11 +4718,11 @@ function exportarFolhaPDF() {
     const bon = totalBonificacoes(e.id, folhaMes);
     const adto = d.adiantamento + d.emprestimo + d.desconto;
     const compras = d.vale_gas + d.compra_produto;
-    const liq = (Number(e.salario)||0) + com + bon - d.total;
+    const liq = salarioFolha(e) + com + bon - d.total;
     const st  = statusPagamento(e.id, folhaMes);
     return [
       e.name,
-      fmtBRL(e.salario),
+      e.soComissao ? 'só comissão' : fmtBRL(e.salario),
       com ? '+ '+fmtBRL(com) : '-',
       bon ? '+ '+fmtBRL(bon) : '-',
       d.quinzena ? fmtBRL(d.quinzena) : '-',
@@ -4688,7 +4738,7 @@ function exportarFolhaPDF() {
     const d = descontosAgregados(e.id, folhaMes);
     const com = totalComissoes(e.id, folhaMes);
     const bon = totalBonificacoes(e.id, folhaMes);
-    acc.salario  += Number(e.salario)||0;
+    acc.salario  += salarioFolha(e);
     acc.com      += com;
     acc.bon      += bon;
     acc.quinzena += d.quinzena;
@@ -4696,7 +4746,7 @@ function exportarFolhaPDF() {
     acc.adto     += d.adiantamento + d.emprestimo + d.desconto;
     acc.compras  += d.vale_gas + d.compra_produto;
     acc.ausencia += d.ausencia;
-    acc.liq      += (Number(e.salario)||0) + com + bon - d.total;
+    acc.liq      += salarioFolha(e) + com + bon - d.total;
     return acc;
   }, { salario:0, com:0, bon:0, quinzena:0, pix:0, adto:0, compras:0, ausencia:0, liq:0 });
   doc.autoTable({
@@ -4735,10 +4785,10 @@ function exportarFolhaXLSX() {
     const d   = descontosAgregados(e.id, folhaMes);
     const com = totalComissoes(e.id, folhaMes);
     const bon = totalBonificacoes(e.id, folhaMes);
-    const liq = (Number(e.salario)||0) + com + bon - d.total;
+    const liq = salarioFolha(e) + com + bon - d.total;
     return {
       Funcionário: e.name, Cargo: e.cargo||'',
-      Salário: e.salario||0,
+      Salário: salarioFolha(e),
       'Comissão': com,
       'Bônus': bon,
       Quinzena: d.quinzena,
