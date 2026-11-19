@@ -294,6 +294,7 @@ const defaultState = () => ({
   bonificacoes: [],    // {id, employeeId, data, valor, motivo, obs}
   ferias: [],          // {id, employeeId, dataPagamento, periodoInicio, periodoFim, valorFerias, valorTerco, obs}
   decimoFechados: {},  // { '2026': { em, por } } — 13º do ano travado
+  escala: {},          // { config, padrao: {empId:{participa, folgas:[dias]}}, ajustes: {'YYYY-MM-DD':{empId:'T'|'F'}} }
   decimo: [],          // {id, employeeId, ano, parcela ('1'|'2'|'unica'), data, avos, valorBruto, adiantamento, inss, outros, outrosDesc, obs}
   cheques: [],         // {id, numero, banco, agencia, conta, valor, dataEmissao, dataVencimento, emitenteNome, emitenteCpf, motivoDevolucao, obs, status, entregas:[{id, data, tipoPessoa, employeeId?, nome, cpf, motivo, obs}], quitacao?:{data, forma, obs}}
   fechamentos: [],     // {id, mes, dataFechamento, totalSalarios, totalSaidas, totalLiquidoPago, totalGeral, empCount, snapshot}
@@ -518,6 +519,7 @@ const ROUTES = [
   { path: '#/extras',      title: 'Comissões e Bônus',  subtitle: 'Adicionais a receber',         icon: 'trending-up',      render: renderExtras },
   { path: '#/ferias',      title: 'Férias',             subtitle: 'Recibos de férias',            icon: 'sun',              render: renderFerias },
   { path: '#/decimo',      title: 'Décimo Terceiro',    subtitle: '1ª e 2ª parcela — separado da folha', icon: 'gift',     render: renderDecimo },
+  { path: '#/escala',      title: 'Escala 5x2',         subtitle: 'Folgas da semana — clique para trocar', icon: 'calendar-days', render: renderEscala },
   { path: '#/cheques',     title: 'Cheques',            subtitle: 'Cheques devolvidos e entregas',icon: 'file-text',        render: renderCheques },
   { path: '#/recibos',     title: 'Recibos',            subtitle: 'Pagamento, adiantamento, vale, PIX', icon: 'file-text',  render: renderRecibos },
   { path: '#/fardamentos', title: 'Fardamentos',        subtitle: 'Estoque e entregas para funcionários', icon: 'shirt',     render: renderFardamentos },
@@ -907,10 +909,12 @@ function renderDashboard() {
   let totalSaidas = 0;         // dinheiro que já saiu via quinzena/pix/vale/adto/etc.
   let totalLiquidoPago = 0;    // líquido restante já quitado (status pago/parcial)
   let totalLiquidoPendente = 0;// líquido restante ainda a pagar
-  let totalAdto = 0, totalGas = 0;
+  let totalAdto = 0, totalGas = 0, totalComDash = 0, totalBonDash = 0;
 
   empsDoMes(mes).forEach(e => {
     totalSalarios += salarioFolha(e);
+    totalComDash += totalComissoes(e.id, mes);
+    totalBonDash += totalBonificacoes(e.id, mes);
     const liq = calcLiquido(e, mes); // salário - saídas do mês
     const st = statusPagamento(e.id, mes);
     if (st === 'pago')        totalLiquidoPago += liq;
@@ -928,7 +932,8 @@ function renderDashboard() {
   const totalPendente = totalLiquidoPendente;
 
   const cards = [
-    { label: 'Total da Folha',    value: fmtBRL(totalSalarios), icon: 'wallet',     color: 'from-brand-600 to-brand-800' },
+    { label: 'Total da Folha',    value: fmtBRL(totalSalarios + totalComDash + totalBonDash), icon: 'wallet', color: 'from-brand-600 to-brand-800',
+      sub: `Salários ${fmtBRL(totalSalarios)} · Comissões ${fmtBRL(totalComDash)} · Bonificações ${fmtBRL(totalBonDash)}` },
     { label: 'Total Pago',        value: fmtBRL(totalPago),     icon: 'check-circle', color: 'from-emerald-500 to-emerald-700' },
     { label: 'Total Pendente',    value: fmtBRL(totalPendente), icon: 'clock',      color: 'from-accent-500 to-accent-600' },
     { label: 'Funcionários',      value: empsOrdenados().length, icon: 'users',     color: 'from-slate-600 to-slate-800' },
@@ -944,6 +949,7 @@ function renderDashboard() {
             <div>
               <p class="text-xs uppercase tracking-wider opacity-80">${c.label}</p>
               <p class="font-display text-xl sm:text-2xl font-bold mt-1">${c.value}</p>
+              ${c.sub ? `<p class="text-[10px] leading-tight opacity-80 mt-1">${c.sub}</p>` : ''}
             </div>
             <i data-lucide="${c.icon}" class="w-5 h-5 opacity-80"></i>
           </div>
@@ -3475,6 +3481,322 @@ function exportarDecimoPDF() {
   reciboFooter(doc);
   doc.save(`decimo-terceiro-${decimoAno}.pdf`);
 }
+
+/* ==========================================================
+   MÓDULO: ESCALA 5x2
+   - Cada pessoa trabalha 5 dias e folga 2 por semana
+   - Sem amarrar por função (qualquer um cobre qualquer um)
+   - Dia fechado (ex.: domingo) já conta como folga
+   - Rodízio: a folga extra anda 1 dia por semana (ninguém fica sempre com sábado)
+   - Ajustes por dia (trocas) clicando na célula
+   ========================================================== */
+const DIAS_CURTO = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+const DIAS_LONGO = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
+const escIso = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const escParse = (iso) => { const [y,m,d] = iso.split('-').map(Number); return new Date(y, m-1, d); };
+const escAddDias = (iso, n) => { const d = escParse(iso); d.setDate(d.getDate()+n); return escIso(d); };
+const escSegunda = (iso) => { const d = escParse(iso); d.setDate(d.getDate() - ((d.getDay()+6)%7)); return escIso(d); };
+let escalaSemana = escSegunda(todayISO());
+
+function escalaCfg() {
+  if (!state.escala || typeof state.escala !== 'object') state.escala = {};
+  const e = state.escala;
+  e.config = Object.assign({ diasAbertos: [1,2,3,4,5,6], minimo: 0, horarioSemana: '', horarioSabado: '', horarioDomingo: '', rodizio: true, baseRodizio: escSegunda(todayISO()) }, e.config || {});
+  e.padrao = e.padrao || {};
+  e.ajustes = e.ajustes || {};
+  return e;
+}
+const escFolgasExtras = (cfg) => Math.max(0, 2 - (7 - cfg.diasAbertos.length));
+const escAbertosOrdem = (cfg) => [1,2,3,4,5,6,0].filter(d => cfg.diasAbertos.includes(d));
+const escParticipa = (empId) => escalaCfg().padrao[empId]?.participa !== false;
+function escEmps(semanaIni) {
+  const fim = escAddDias(semanaIni, 6);
+  return empsTodos().filter(e => (!e.inativo || (e.inativoDesde && e.inativoDesde >= semanaIni)) && (!e.admissao || e.admissao <= fim) && escParticipa(e.id));
+}
+const escEmFerias = (empId, iso) => (state.ferias || []).some(f => f.employeeId === empId && f.periodoInicio && f.periodoFim && f.periodoInicio <= iso && iso <= f.periodoFim);
+
+/* Folgas (dias da semana) da pessoa naquela semana, já com rodízio */
+function escFolgasSemana(empId, iso) {
+  const E = escalaCfg(), cfg = E.config;
+  const abertos = escAbertosOrdem(cfg);
+  let extras = (E.padrao[empId]?.folgas || []).filter(d => cfg.diasAbertos.includes(d));
+  if (cfg.rodizio && abertos.length && extras.length) {
+    const sem = Math.round((escParse(escSegunda(iso)) - escParse(escSegunda(cfg.baseRodizio || iso))) / (7 * 864e5));
+    extras = extras.map(d => abertos[(((abertos.indexOf(d) + sem) % abertos.length) + abertos.length) % abertos.length]);
+  }
+  return extras;
+}
+/* Status do dia: T trabalha · F folga · X fechado · FE férias · I inativo/fora */
+function escStatusBase(emp, iso) {
+  const cfg = escalaCfg().config;
+  if (emp.admissao && iso < emp.admissao) return 'I';
+  if (emp.inativo && emp.inativoDesde && iso >= emp.inativoDesde) return 'I';
+  if (escEmFerias(emp.id, iso)) return 'FE';
+  const dow = escParse(iso).getDay();
+  if (!cfg.diasAbertos.includes(dow)) return 'X';
+  return escFolgasSemana(emp.id, iso).includes(dow) ? 'F' : 'T';
+}
+function escStatus(emp, iso) {
+  const base = escStatusBase(emp, iso);
+  if (base === 'FE' || base === 'I') return base;
+  const aj = escalaCfg().ajustes[iso]?.[emp.id];
+  return aj || base;
+}
+function escClicar(empId, iso) {
+  const emp = state.employees.find(e => e.id === empId); if (!emp) return;
+  const base = escStatusBase(emp, iso);
+  if (base === 'FE' || base === 'I') return;
+  const atual = escStatus(emp, iso);
+  const novo = atual === 'T' ? 'F' : 'T';
+  const E = escalaCfg();
+  const doDia = { ...(E.ajustes[iso] || {}) };
+  const baseTF = base === 'X' ? 'F' : base;
+  if (novo === baseTF) delete doDia[empId]; else doDia[empId] = novo;
+  if (Object.keys(doDia).length) E.ajustes[iso] = doDia; else delete E.ajustes[iso];
+  persist(); renderEscala();
+}
+function escHorario(dow) {
+  const c = escalaCfg().config;
+  return dow === 6 ? c.horarioSabado : dow === 0 ? c.horarioDomingo : c.horarioSemana;
+}
+
+function renderEscala() {
+  const E = escalaCfg(), cfg = E.config;
+  const ini = escalaSemana;
+  const dias = Array.from({ length: 7 }, (_, i) => escAddDias(ini, i));
+  const emps = escEmps(ini);
+  const extrasNec = escFolgasExtras(cfg);
+  const semPadrao = emps.filter(e => (E.padrao[e.id]?.folgas || []).filter(d => cfg.diasAbertos.includes(d)).length !== extrasNec);
+  const hoje = todayISO();
+
+  const porDia = dias.map(iso => emps.filter(e => escStatus(e, iso) === 'T').length);
+  const celula = (e, iso) => {
+    const st = escStatus(e, iso);
+    const ajustado = !!E.ajustes[iso]?.[e.id];
+    const estilo = {
+      T:  'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200',
+      F:  'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200',
+      X:  'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500',
+      FE: 'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200',
+      I:  'bg-slate-50 text-slate-300 dark:bg-slate-900 dark:text-slate-600',
+    }[st];
+    const txt = { T: 'Trabalha', F: 'FOLGA', X: 'Fechado', FE: 'Férias', I: '—' }[st];
+    const clicavel = st !== 'FE' && st !== 'I';
+    return `<td class="p-1"><button ${clicavel ? `onclick="escClicar('${e.id}','${iso}')"` : 'disabled'} title="${clicavel ? 'Clique para trocar trabalho/folga neste dia' : ''}"
+      class="w-full rounded-md px-1 py-2 text-[11px] font-bold ${estilo} ${ajustado ? 'ring-2 ring-violet-500' : ''} ${clicavel ? 'hover:opacity-80' : 'cursor-default'}">${txt}${ajustado ? ' •' : ''}</button></td>`;
+  };
+
+  document.getElementById('page').innerHTML = `
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <div class="flex items-center gap-2">
+        <button onclick="escalaSemana=escAddDias(escalaSemana,-7);renderEscala()" class="px-3 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 font-bold">◀</button>
+        <div class="px-3 py-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-semibold text-sm">Semana ${fmtDate(dias[0])} a ${fmtDate(dias[6])}</div>
+        <button onclick="escalaSemana=escAddDias(escalaSemana,7);renderEscala()" class="px-3 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 font-bold">▶</button>
+        <button onclick="escalaSemana=escSegunda(todayISO());renderEscala()" class="px-3 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-sm font-semibold">Hoje</button>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <button onclick="escGerarAuto()" class="px-3 py-2 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold flex items-center gap-1"><i data-lucide="wand-2" class="w-4 h-4"></i> Gerar folgas automático</button>
+        <button onclick="escConfig()" class="px-3 py-2 rounded-lg bg-slate-600 hover:bg-slate-700 text-white text-sm font-semibold flex items-center gap-1"><i data-lucide="settings" class="w-4 h-4"></i> Configurar</button>
+        <button onclick="escPDF('semana')" class="px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold flex items-center gap-1"><i data-lucide="printer" class="w-4 h-4"></i> Semana</button>
+        <button onclick="escPDF('mes')" class="px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold flex items-center gap-1"><i data-lucide="calendar-days" class="w-4 h-4"></i> Mês</button>
+      </div>
+    </div>
+
+    ${semPadrao.length ? `<div class="mb-4 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 p-3 text-sm text-amber-800 dark:text-amber-200">
+      ⚠️ ${semPadrao.length} pessoa(s) sem folga definida: ${semPadrao.slice(0,6).map(e => escape(e.name.split(' ')[0])).join(', ')}${semPadrao.length > 6 ? '…' : ''}.
+      Clique em <b>Gerar folgas automático</b> ou no nome da pessoa para escolher.</div>` : ''}
+
+    <div class="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm min-w-[760px]">
+          <thead><tr class="bg-brand-800 text-white text-xs">
+            <th class="text-left px-3 py-2">Funcionário</th>
+            ${dias.map(iso => { const dow = escParse(iso).getDay(); const h = escHorario(dow);
+              return `<th class="px-1 py-2 text-center ${iso === hoje ? 'bg-accent-500' : ''}">${DIAS_CURTO[dow]}<div class="font-normal opacity-80">${fmtDate(iso).slice(0,5)}</div>${h && cfg.diasAbertos.includes(dow) ? `<div class="font-normal opacity-70 text-[10px]">${escape(h)}</div>` : ''}</th>`; }).join('')}
+            <th class="px-2 py-2 text-center">Dias</th>
+          </tr></thead>
+          <tbody>
+            ${emps.length === 0 ? `<tr><td colspan="9" class="text-center py-10 text-slate-500">Nenhum funcionário na escala.</td></tr>` : emps.map(e => {
+              const trab = dias.filter(iso => escStatus(e, iso) === 'T').length;
+              const temFerias = dias.some(iso => ['FE','I'].includes(escStatus(e, iso)));
+              const ok = trab === 5 || temFerias;
+              return `<tr class="border-b border-slate-100 dark:border-slate-800">
+                <td class="px-3 py-1.5"><button onclick="escFolgasForm('${e.id}')" class="text-left hover:underline" title="Escolher folgas padrão">
+                  <div class="font-semibold text-brand-800 dark:text-white text-xs">${escape(e.name)}</div>
+                  <div class="text-[10px] text-slate-500">${escape(e.cargo||'')}${(E.padrao[e.id]?.folgas||[]).length ? ' · folga ' + (E.padrao[e.id].folgas).map(d => DIAS_CURTO[d]).join('/') + (cfg.rodizio ? ' (rodízio)' : '') : ''}</div></button></td>
+                ${dias.map(iso => celula(e, iso)).join('')}
+                <td class="px-2 text-center"><span class="px-2 py-1 rounded-full text-xs font-bold ${ok ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'}">${trab}${ok ? '' : ' ⚠️'}</span></td>
+              </tr>`; }).join('')}
+          </tbody>
+          <tfoot><tr class="bg-slate-50 dark:bg-slate-800 text-xs font-bold">
+            <td class="px-3 py-2">Trabalhando no dia</td>
+            ${dias.map((iso, i) => { const dow = escParse(iso).getDay(); const aberto = cfg.diasAbertos.includes(dow); const baixo = aberto && cfg.minimo > 0 && porDia[i] < cfg.minimo;
+              return `<td class="text-center py-2 ${baixo ? 'text-red-600' : ''}">${aberto || porDia[i] ? porDia[i] : '-'}${baixo ? ` ⚠️<div class="font-normal text-[10px]">mín. ${cfg.minimo}</div>` : ''}</td>`; }).join('')}
+            <td></td>
+          </tr></tfoot>
+        </table>
+      </div>
+      <div class="px-4 py-3 text-[11px] text-slate-500 flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-100 dark:border-slate-800">
+        <span><b class="text-emerald-600">Trabalha</b> · <b class="text-amber-600">FOLGA</b> · <b class="text-sky-600">Férias</b> (puxa da tela Férias) · Fechado = empresa não abre</span>
+        <span>Clique numa célula para trocar trabalho/folga só naquele dia (fica marcado com •). Coluna "Dias" deve dar 5.</span>
+      </div>
+    </div>
+  `;
+  lucide.createIcons();
+}
+
+function escGerarAuto() {
+  const E = escalaCfg(), cfg = E.config;
+  const extras = escFolgasExtras(cfg);
+  const emps = empsOrdenados().filter(e => escParticipa(e.id));
+  if (!emps.length) { toast('Nenhum funcionário ativo na escala', 'warn'); return; }
+  const abertos = escAbertosOrdem(cfg).filter(d => d !== 0 || cfg.diasAbertos.length === 7);
+  const lista = abertos.length ? abertos : escAbertosOrdem(cfg);
+  confirmAction(`Gerar as folgas de ${emps.length} funcionário(s) distribuindo igualmente nos dias (${extras} folga(s) extra por pessoa, além dos dias fechados)? Isso troca as folgas padrão atuais. Os ajustes de dias específicos continuam.`, () => {
+    const cont = Object.fromEntries(lista.map(d => [d, 0]));
+    emps.forEach((e, i) => {
+      const escolhidas = [];
+      for (let k = 0; k < extras; k++) {
+        const ordem = lista.slice(i % lista.length).concat(lista.slice(0, i % lista.length));
+        const livre = ordem.filter(d => !escolhidas.includes(d)).sort((a, b) => cont[a] - cont[b])[0];
+        if (livre === undefined) break;
+        escolhidas.push(livre); cont[livre]++;
+      }
+      E.padrao[e.id] = { ...(E.padrao[e.id] || {}), participa: true, folgas: escolhidas };
+    });
+    cfg.baseRodizio = escSegunda(escalaSemana);
+    persist(); renderEscala(); toast('Folgas geradas', 'success');
+  });
+}
+
+function escFolgasForm(empId) {
+  const E = escalaCfg(), cfg = E.config;
+  const emp = state.employees.find(e => e.id === empId); if (!emp) return;
+  const p = E.padrao[empId] || {};
+  const extras = escFolgasExtras(cfg);
+  openModal({
+    title: `Folgas — ${escape(emp.name)}`,
+    body: `
+      <label class="flex items-center gap-2 mb-4 text-sm"><input id="escPart" type="checkbox" ${p.participa !== false ? 'checked' : ''} class="w-4 h-4"> Participa da escala</label>
+      <p class="text-sm text-slate-600 dark:text-slate-300 mb-2">Escolha <b>${extras}</b> dia(s) de folga${cfg.diasAbertos.length < 7 ? ' (os dias em que a empresa não abre já contam como folga)' : ''}:</p>
+      <div class="grid grid-cols-4 sm:grid-cols-7 gap-2">
+        ${[1,2,3,4,5,6,0].map(d => { const fechado = !cfg.diasAbertos.includes(d);
+          return `<label class="flex flex-col items-center gap-1 p-2 rounded-lg border ${fechado ? 'opacity-50' : 'cursor-pointer'} border-slate-200 dark:border-slate-700 text-xs font-semibold">
+            ${DIAS_CURTO[d]}<input type="checkbox" class="escDia w-4 h-4" value="${d}" ${fechado ? 'checked disabled' : (p.folgas || []).includes(d) ? 'checked' : ''}>${fechado ? '<span class="text-[9px]">fechado</span>' : ''}</label>`; }).join('')}
+      </div>
+      ${cfg.rodizio ? `<p class="text-[11px] text-slate-500 mt-3">Rodízio ligado: a folga escolhida vale para a semana de ${fmtDate(cfg.baseRodizio)} e anda 1 dia a cada semana.</p>` : ''}
+    `,
+    footer: `
+      <button class="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-sm font-semibold" onclick="closeModal()">Cancelar</button>
+      <button id="escFolgaOk" class="px-4 py-2 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold">Salvar</button>
+    `
+  });
+  document.getElementById('escFolgaOk').addEventListener('click', () => {
+    const participa = document.getElementById('escPart').checked;
+    const folgas = [...document.querySelectorAll('.escDia:checked:not(:disabled)')].map(i => Number(i.value));
+    if (participa && folgas.length !== extras) { toast(`Escolha exatamente ${extras} dia(s) de folga`, 'error'); return; }
+    E.padrao[empId] = { participa, folgas };
+    if (cfg.rodizio) {
+      // a escolha vale para a semana que está aberta na tela
+      const sem = Math.round((escParse(escalaSemana) - escParse(escSegunda(cfg.baseRodizio))) / (7 * 864e5));
+      const abertos = escAbertosOrdem(cfg);
+      E.padrao[empId].folgas = folgas.map(d => abertos[(((abertos.indexOf(d) - sem) % abertos.length) + abertos.length) % abertos.length]);
+    }
+    persist(); closeModal(); renderEscala(); toast('Folgas salvas', 'success');
+  });
+}
+
+function escConfig() {
+  const cfg = escalaCfg().config;
+  openModal({
+    title: 'Configurar escala',
+    body: `
+      <p class="text-xs font-semibold uppercase text-slate-500 mb-2">Dias em que a empresa abre</p>
+      <div class="grid grid-cols-4 sm:grid-cols-7 gap-2 mb-4">
+        ${[1,2,3,4,5,6,0].map(d => `<label class="flex flex-col items-center gap-1 p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold cursor-pointer">${DIAS_CURTO[d]}<input type="checkbox" class="escAberto w-4 h-4" value="${d}" ${cfg.diasAbertos.includes(d) ? 'checked' : ''}></label>`).join('')}
+      </div>
+      <div class="grid sm:grid-cols-2 gap-4">
+        ${fld('Mínimo de pessoas por dia (0 = sem aviso)', `<input id="escMin" type="number" min="0" value="${cfg.minimo || 0}" class="${inp()}">`)}
+        ${fld('Horário seg a sex', `<input id="escHSem" value="${escape(cfg.horarioSemana || '')}" placeholder="Ex: 07:20 às 17:30" class="${inp()}">`)}
+        ${fld('Horário sábado', `<input id="escHSab" value="${escape(cfg.horarioSabado || '')}" placeholder="Ex: 07:20 às 13:00" class="${inp()}">`)}
+        ${fld('Horário domingo', `<input id="escHDom" value="${escape(cfg.horarioDomingo || '')}" placeholder="Se abrir" class="${inp()}">`)}
+      </div>
+      <label class="flex items-start gap-2 mt-4 text-sm"><input id="escRod" type="checkbox" ${cfg.rodizio ? 'checked' : ''} class="w-4 h-4 mt-0.5">
+        <span><b>Rodízio de folga</b><span class="block text-xs text-slate-500">A folga de cada pessoa anda 1 dia por semana (ex.: segunda → terça → quarta…), assim ninguém fica sempre com o sábado.</span></span></label>
+    `,
+    footer: `
+      <button class="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-sm font-semibold" onclick="closeModal()">Cancelar</button>
+      <button id="escCfgOk" class="px-4 py-2 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold">Salvar</button>
+    `
+  });
+  document.getElementById('escCfgOk').addEventListener('click', () => {
+    const abertos = [...document.querySelectorAll('.escAberto:checked')].map(i => Number(i.value));
+    if (abertos.length < 5) { toast('A empresa precisa abrir pelo menos 5 dias para a escala 5x2', 'error'); return; }
+    const rod = document.getElementById('escRod').checked;
+    if (rod && !cfg.rodizio) cfg.baseRodizio = escSegunda(escalaSemana);
+    Object.assign(cfg, {
+      diasAbertos: abertos, minimo: Math.max(0, Number(document.getElementById('escMin').value) || 0),
+      horarioSemana: document.getElementById('escHSem').value.trim(), horarioSabado: document.getElementById('escHSab').value.trim(),
+      horarioDomingo: document.getElementById('escHDom').value.trim(), rodizio: rod,
+    });
+    persist(); closeModal(); renderEscala(); toast('Configuração salva', 'success');
+  });
+}
+
+function escPDF(tipo) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape' });
+  const cfg = escalaCfg().config;
+  let dias, titulo;
+  if (tipo === 'mes') {
+    const ref = escParse(escalaSemana); ref.setDate(ref.getDate() + 3);
+    const y = ref.getFullYear(), m = ref.getMonth();
+    const n = new Date(y, m + 1, 0).getDate();
+    dias = Array.from({ length: n }, (_, i) => escIso(new Date(y, m, i + 1)));
+    titulo = `ESCALA 5x2 · ${ref.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }).toUpperCase()}`;
+  } else {
+    dias = Array.from({ length: 7 }, (_, i) => escAddDias(escalaSemana, i));
+    titulo = `ESCALA 5x2 · SEMANA ${fmtDate(dias[0])} A ${fmtDate(dias[6])}`;
+  }
+  const emps = escEmps(dias[0]);
+  const sig = { T: tipo === 'mes' ? 'T' : 'Trabalha', F: 'FOLGA', X: '-', FE: 'FÉRIAS', I: '' };
+  const sigMes = { T: 'T', F: 'F', X: '-', FE: 'FE', I: '' };
+  const mapa = tipo === 'mes' ? sigMes : sig;
+  reciboHeader(doc, titulo);
+  const head = [['Funcionário', ...dias.map(iso => tipo === 'mes' ? `${DIAS_CURTO[escParse(iso).getDay()][0]}\n${iso.slice(8)}` : `${DIAS_CURTO[escParse(iso).getDay()]} ${fmtDate(iso).slice(0,5)}`)]];
+  const body = emps.map(e => [e.name, ...dias.map(iso => mapa[escStatus(e, iso)])]);
+  body.push(['Trabalhando', ...dias.map(iso => String(emps.filter(e => escStatus(e, iso) === 'T').length))]);
+  doc.autoTable({
+    startY: 50, head, body, theme: 'grid',
+    headStyles: { fillColor: [15,61,46], fontSize: tipo === 'mes' ? 6 : 8, halign: 'center' },
+    styles: { fontSize: tipo === 'mes' ? 6 : 8, cellPadding: tipo === 'mes' ? 0.8 : 1.6, halign: 'center' },
+    columnStyles: { 0: { halign: 'left', cellWidth: tipo === 'mes' ? 42 : 60 } },
+    didParseCell: (h) => {
+      if (h.section !== 'body' || h.column.index === 0) return;
+      const v = h.cell.raw;
+      if (v === 'FOLGA' || v === 'F') h.cell.styles.fillColor = [254, 243, 199];
+      else if (v === 'FÉRIAS' || v === 'FE') h.cell.styles.fillColor = [224, 242, 254];
+      else if (v === '-') h.cell.styles.fillColor = [241, 245, 249];
+      if (h.row.index === body.length - 1) h.cell.styles.fontStyle = 'bold';
+    },
+    margin: { left: 8, right: 8 }
+  });
+  const yFim = doc.lastAutoTable.finalY + 6;
+  doc.setFontSize(8);
+  const hs = [cfg.horarioSemana && `Seg a sex: ${cfg.horarioSemana}`, cfg.horarioSabado && `Sábado: ${cfg.horarioSabado}`, cfg.horarioDomingo && `Domingo: ${cfg.horarioDomingo}`].filter(Boolean).join('   ·   ');
+  doc.text((tipo === 'mes' ? 'T = trabalha   F = folga   FE = férias   - = fechado' : '') + (hs ? (tipo === 'mes' ? '      ' : '') + 'Horários: ' + hs : ''), 8, yFim);
+  reciboFooter(doc);
+  doc.save(`escala-${tipo}-${dias[0]}.pdf`);
+}
+
+window.escClicar = escClicar;
+window.escGerarAuto = escGerarAuto;
+window.escFolgasForm = escFolgasForm;
+window.escConfig = escConfig;
+window.escPDF = escPDF;
+window.renderEscala = renderEscala;
+window.escAddDias = escAddDias;
+window.escSegunda = escSegunda;
 
 window.decimoForm = decimoForm;
 window.decimoExcluir = decimoExcluir;
