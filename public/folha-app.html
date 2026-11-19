@@ -3204,6 +3204,15 @@ function renderDecimo() {
                 </tr>`;
               }).join('')}
             </tbody>
+            <tfoot><tr class="bg-accent-500 text-white font-bold">
+              <td class="py-2 px-2">TOTAIS (${emps.length})</td>
+              <td class="py-2 pr-3 text-right font-mono">${fmtBRL(emps.reduce((s, e) => s + (Number(e.salario)||0), 0))}</td>
+              <td></td>
+              <td class="py-2 pr-3 text-right font-mono">${fmtBRL(emps.reduce((s, e) => s + previstoDecimo(e, decimoAno), 0))}</td>
+              <td class="py-2 pr-3 font-mono">${fmtBRL(emps.reduce((s, e) => { const d = decimoDe(e.id, decimoAno, '1') || decimoDe(e.id, decimoAno, 'unica'); return s + (d ? liquidoDecimo(d) : 0); }, 0))}</td>
+              <td class="py-2 pr-3 font-mono">${fmtBRL(emps.reduce((s, e) => { const d = decimoDe(e.id, decimoAno, '2'); return s + (d ? liquidoDecimo(d) : 0); }, 0))}</td>
+              <td class="py-2 pr-2 text-right font-mono">${fmtBRL(emps.reduce((s, e) => s + state.decimo.filter(d => d.employeeId === e.id && String(d.ano) === decimoAno).reduce((a, d) => a + liquidoDecimo(d), 0), 0))}</td>
+            </tr></tfoot>
           </table>
         </div>
         <p class="text-[11px] text-slate-400 mt-3">Avos: meses trabalhados no ano (mês com 15 dias ou mais conta). 13º previsto = salário × avos ÷ 12. Os valores são sugestões — você pode alterar no lançamento.</p>`}
@@ -3394,13 +3403,15 @@ function exportarDecimoPDF() {
   const doc = new jsPDF({ orientation: 'landscape' });
   reciboHeader(doc, `13º SALÁRIO · ${decimoAno}`);
   const emps = empsTodos().filter(e => state.decimo.some(d => d.employeeId === e.id && String(d.ano) === decimoAno) || avosDecimo(e, decimoAno) > 0);
-  let t1 = 0, t2 = 0;
+  let t1 = 0, t2 = 0, tSal = 0, tPrev = 0;
   const cel = (d) => d ? `${fmtBRL(liquidoDecimo(d))} (${fmtDate(d.data)})` : '-';
   const body = emps.map(e => {
     const p1 = decimoDe(e.id, decimoAno, '1'), p2 = decimoDe(e.id, decimoAno, '2'), u = decimoDe(e.id, decimoAno, 'unica');
     if (p1) t1 += liquidoDecimo(p1);
     if (p2) t2 += liquidoDecimo(p2);
     if (u) t2 += liquidoDecimo(u);
+    tSal += Number(e.salario) || 0;
+    tPrev += previstoDecimo(e, decimoAno);
     return [e.name + (e.inativo ? ' (inativo)' : ''), fmtBRL(e.salario), `${avosDecimo(e, decimoAno)}/12`, fmtBRL(previstoDecimo(e, decimoAno)),
       u ? cel(u) + ' única' : cel(p1), u ? '-' : cel(p2), fmtBRL([p1, p2, u].filter(Boolean).reduce((s, d) => s + liquidoDecimo(d), 0))];
   });
@@ -3408,7 +3419,7 @@ function exportarDecimoPDF() {
     startY: 50,
     head: [['Funcionário','Salário','Avos','13º previsto','1ª parcela (líquido)','2ª parcela (líquido)','Total pago']],
     body,
-    foot: [['TOTAIS', '', '', '', fmtBRL(t1), fmtBRL(t2), fmtBRL(t1 + t2)]],
+    foot: [['TOTAIS', fmtBRL(tSal), '', fmtBRL(tPrev), fmtBRL(t1), fmtBRL(t2), fmtBRL(t1 + t2)]],
     theme: 'striped', headStyles: { fillColor: [15,61,46] }, footStyles: { fillColor: [255,122,26] }, styles: { fontSize: 8 }
   });
   reciboFooter(doc);

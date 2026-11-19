@@ -16,6 +16,7 @@ import FolhaModulo from "./Folha";
 import RecibosTab from "./Recibos";
 import RelatorioVendedores from "./RelatorioVendedores";
 import AbastecimentoTab, { contarAlertasAbastecimento } from "./Abastecimento";
+import ComodatoTab, { statusComodato } from "./Comodato";
 
 /* ══════════════════════════════════════
    SINCRONIZAÇÃO COM A NUVEM
@@ -2993,12 +2994,14 @@ export default function App() {
   const [motos, setMotos, motosLoaded] = useCloudState("motos", []);
   const [abastecimentos, setAbastecimentos, abastecimentosLoaded] = useCloudState("abastecimentos", []);
   const [abastConfig, setAbastConfig, abastConfigLoaded] = useCloudState("abastecimento_config", {});
+  const [comodatos, setComodatos, comodatosLoaded] = useCloudState("comodatos", []);
   const [vendedorRelatorio, setVendedorRelatorio] = useState("");
-  const allLoaded = formasLoaded && vendedoresLoaded && historicoLoaded && cadastrosLoaded && empresasLoaded && recibosLoaded && motosLoaded && abastecimentosLoaded && abastConfigLoaded;
+  const allLoaded = formasLoaded && vendedoresLoaded && historicoLoaded && cadastrosLoaded && empresasLoaded && recibosLoaded && motosLoaded && abastecimentosLoaded && abastConfigLoaded && comodatosLoaded;
 
   // Diferenças sempre recalculadas (entrada atual x valor entregue)
   const vendedoresAtual = useMemo(() => (vendedores || []).map(comPrestacaoAtual), [vendedores]);
   const alertasAbast = useMemo(() => contarAlertasAbastecimento(motos || [], abastecimentos || [], abastConfig || {}), [motos, abastecimentos, abastConfig]);
+  const comodatosVencidos = useMemo(() => (comodatos || []).filter((c) => statusComodato(c) === "vencido").length, [comodatos]);
   const historicoAtual = useMemo(
     () => (historico || []).map((f) => ({ ...f, vendedores: (f.vendedores || []).map(comPrestacaoAtual) })),
     [historico]
@@ -3179,6 +3182,10 @@ export default function App() {
         <button style={aba === "impressao" ? tabActive : tabInactive} onClick={() => setAba("impressao")}>🖨️ Imprimir</button>
         <button style={aba === "recibos" ? tabActive : tabInactive} onClick={() => setAba("recibos")}>🧾 Recibos</button>
         <button style={aba === "relatorio" ? tabActive : tabInactive} onClick={() => { setVendedorRelatorio(""); setAba("relatorio"); }}>📊 Relatório</button>
+        <button style={aba === "comodato" ? tabActive : tabInactive} onClick={() => setAba("comodato")}>
+          📦 Comodato
+          {comodatosVencidos > 0 && <span style={{ marginLeft: 5, background: "#EF4444", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 10, padding: "1px 6px" }}>{comodatosVencidos}</span>}
+        </button>
         <button style={aba === "abastecimento" ? tabActive : tabInactive} onClick={() => setAba("abastecimento")}>
           ⛽ Abastecimento
           {alertasAbast > 0 && <span style={{ marginLeft: 5, background: "#EF4444", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 10, padding: "1px 6px" }}>{alertasAbast}</span>}
@@ -3213,6 +3220,7 @@ export default function App() {
           <RelatorioVendedores cadastros={cadastros} historico={historico} vendedorInicial={vendedorRelatorio}
             onAbrirDia={(id) => { const f = historico.find((x) => x.id === id); if (f) { setFechamentoVer(f); setAba("ver_fechamento"); } }} />
         )}
+        {aba === "comodato" && <ComodatoTab comodatos={comodatos} setComodatos={setComodatos} empresas={empresas} currentUser={currentUser} />}
         {aba === "abastecimento" && (
           <AbastecimentoTab motos={motos} setMotos={setMotos} abastecimentos={abastecimentos} setAbastecimentos={setAbastecimentos}
             config={abastConfig} setConfig={setAbastConfig} cadastros={cadastros} currentUser={currentUser} />
@@ -3335,7 +3343,7 @@ export default function App() {
         {aba === "calculadora" && <CalculadoraTab />}
         {aba === "backup" && currentUser?.admin && (
           <BackupTab
-            dados={{ vendedores, historico, cadastros, formas, empresas, recibos, motos, abastecimentos, abastecimento_config: abastConfig }}
+            dados={{ vendedores, historico, cadastros, formas, empresas, recibos, motos, abastecimentos, abastecimento_config: abastConfig, comodatos }}
             onImportar={(dados) => {
               if (dados.vendedores) setVendedores(dados.vendedores);
               if (dados.historico) setHistorico(dados.historico);
@@ -3346,6 +3354,7 @@ export default function App() {
               if (dados.motos) setMotos(dados.motos);
               if (dados.abastecimentos) setAbastecimentos(dados.abastecimentos);
               if (dados.abastecimento_config) setAbastConfig(dados.abastecimento_config);
+              if (dados.comodatos) setComodatos(dados.comodatos);
               alert("✅ Backup importado com sucesso!");
               setAba("entrada");
             }}
