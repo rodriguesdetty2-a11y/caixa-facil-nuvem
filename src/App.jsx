@@ -127,6 +127,32 @@ function useCloudState(key, defaultValue) {
   return [value, setValue, loaded];
 }
 
+/* ══════════════════════════════════════
+   UNIDADES DO CAIXA (GP Liquigás, GP Trindade...)
+   Cada unidade tem seus próprios dados. A unidade principal usa as chaves
+   antigas (vendedores, historico...). As outras usam "vendedores__<id>" etc.
+   Para trocar de unidade a página recarrega, assim nunca mistura dados.
+══════════════════════════════════════ */
+export const UNIDADES_CAIXA_PADRAO = [
+  { id: "principal", nome: "GP Liquigás — Araripina" },
+  { id: "trindade", nome: "GP Trindade" },
+];
+function lerUnidadeCaixa() {
+  try { return localStorage.getItem("caixafacil_unidade_caixa") || "principal"; } catch { return "principal"; }
+}
+const UNIDADE_CAIXA = lerUnidadeCaixa();
+const chaveUnidade = (k) => (UNIDADE_CAIXA === "principal" ? k : `${k}__${UNIDADE_CAIXA}`);
+function trocarUnidadeCaixa(id) {
+  try { localStorage.setItem("caixafacil_unidade_caixa", id); } catch {}
+  window.location.reload();
+}
+export function unidadesCaixaDe(usuario, permUnidades, todas) {
+  const ids = (todas || []).map((u) => u.id);
+  if (!usuario || usuario.admin) return ids;
+  const l = permUnidades && Array.isArray(permUnidades[usuario.id]) ? permUnidades[usuario.id].filter((id) => ids.includes(id)) : [];
+  return l.length > 0 ? l : ["principal"];
+}
+
 /* Selo de sincronização + botão "Sincronizar" (topo da tela) */
 function SyncBadge() {
   const st = useSyncStatus();
@@ -358,12 +384,13 @@ function CalculadoraTab() {
 /* ══════════════════════════════════════
    ABA BACKUP
 ══════════════════════════════════════ */
-function BackupTab({ dados, onImportar }) {
+function BackupTab({ dados, onImportar, unidadeNome = "" }) {
   const fileRef = useRef();
 
   const exportar = () => {
     const agora = new Date();
-    const nomeArquivo = `caixafacil_backup_${agora.toLocaleDateString("pt-BR").replace(/\//g, "-")}_${agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }).replace(":", "h")}.json`;
+    const sufixo = UNIDADE_CAIXA === "principal" ? "" : `${UNIDADE_CAIXA}_`;
+    const nomeArquivo = `caixafacil_backup_${sufixo}${agora.toLocaleDateString("pt-BR").replace(/\//g, "-")}_${agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }).replace(":", "h")}.json`;
     const json = JSON.stringify({ ...dados, versao: "1.0", exportadoEm: agora.toISOString() }, null, 2);
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -405,7 +432,7 @@ function BackupTab({ dados, onImportar }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={card}>
-        <h2 style={cardTitle}>💾 Backup dos Dados</h2>
+        <h2 style={cardTitle}>💾 Backup dos Dados{unidadeNome ? ` — ${unidadeNome}` : ""}</h2>
         <div style={{ fontSize: 13, color: "#64748B", marginBottom: 24 }}>
           Salve um arquivo de backup no seu computador para não perder seus dados. Você pode restaurar a qualquer momento.
         </div>
@@ -2802,7 +2829,23 @@ function EscolherAcessos({ valor, onChange }) {
   );
 }
 
-function ConferentesTab({ currentUser, onMudanca, permissoes = {}, setPermissoes }) {
+function EscolherUnidadesCaixa({ unidades, valor, onChange }) {
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {unidades.map((u) => {
+        const on = valor.includes(u.id);
+        return (
+          <label key={u.id} style={{ display: "flex", alignItems: "center", gap: 8, background: on ? "#3b0764" : "#0F172A", border: `1px solid ${on ? "#A855F7" : "#334155"}`, borderRadius: 8, padding: "7px 10px", cursor: "pointer", fontSize: 13, color: "#F1F5F9" }}>
+            <input type="checkbox" checked={on} onChange={() => onChange(on ? valor.filter((x) => x !== u.id) : [...valor, u.id])} style={{ width: 16, height: 16, cursor: "pointer" }} />
+            🏪 {u.nome}
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+function ConferentesTab({ currentUser, onMudanca, permissoes = {}, setPermissoes, unidadesCaixa = UNIDADES_CAIXA_PADRAO, permUnidades = {}, setPermUnidades }) {
   const [conferentes, setConferentes] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [novoNome, setNovoNome] = useState("");
@@ -2818,9 +2861,52 @@ function ConferentesTab({ currentUser, onMudanca, permissoes = {}, setPermissoes
   const [novoAcessos, setNovoAcessos] = useState(ACESSOS_PADRAO);
   const [editandoAcessoId, setEditandoAcessoId] = useState(null);
   const [acessoInput, setAcessoInput] = useState([]);
+  const [unidades, setUnidades] = useState([]);
+  const [vinculos, setVinculos] = useState([]);
+  const [unidInput, setUnidInput] = useState([]);
+  const [caixaInput, setCaixaInput] = useState(["principal"]);
+  const [novoCaixa, setNovoCaixa] = useState(["principal"]);
+  const gravarCaixa = (id, lista) => {
+    if (!setPermUnidades) return;
+    setPermUnidades((prev) => {
+      const n = { ...(prev || {}) };
+      if (lista.length === 0) delete n[id]; else n[id] = lista;
+      return n;
+    });
+  };
 
-  const salvarAcessos = (id) => {
+  const carregarUnidades = async () => {
+    if (!supabase) return;
+    try {
+      const { data: u } = await supabase.from("folha_unidades").select("*").order("ordem", { ascending: true });
+      setUnidades((u || []).filter((x) => x.ativa !== false));
+      const { data: v } = await supabase.from("folha_conferentes_unidades").select("conferente_id, unidade_id");
+      setVinculos(v || []);
+    } catch (e) { console.error("[Acessos] unidades:", e); }
+  };
+  useEffect(() => { carregarUnidades(); }, []);
+  const unidadesDe = (id) => vinculos.filter((v) => v.conferente_id === id).map((v) => v.unidade_id);
+
+  const salvarUnidades = async (id) => {
+    if (!supabase || unidades.length === 0) return true;
+    const todas = unidInput.length === 0 || unidInput.length === unidades.length;
+    const atuais = unidadesDe(id);
+    const iguais = todas ? atuais.length === 0 : (atuais.length === unidInput.length && unidInput.every((x) => atuais.includes(x)));
+    if (iguais) return true;
+    const { error: e1 } = await supabase.from("folha_conferentes_unidades").delete().eq("conferente_id", id);
+    if (e1) { alert("Erro ao salvar unidades da Folha: " + e1.message); return false; }
+    if (!todas) {
+      const { error: e2 } = await supabase.from("folha_conferentes_unidades").insert(unidInput.map((u) => ({ conferente_id: id, unidade_id: u })));
+      if (e2) { alert("Erro ao salvar unidades da Folha: " + e2.message); return false; }
+    }
+    await carregarUnidades();
+    return true;
+  };
+
+  const salvarAcessos = async (id) => {
+    if (acessoInput.includes("folha") && !(await salvarUnidades(id))) return;
     setPermissoes && setPermissoes((prev) => ({ ...(prev || {}), [id]: acessoInput }));
+    gravarCaixa(id, caixaInput);
     setEditandoAcessoId(null);
     alert("✅ Acessos salvos! O usuário verá as abas novas em alguns segundos.");
   };
@@ -2842,8 +2928,9 @@ function ConferentesTab({ currentUser, onMudanca, permissoes = {}, setPermissoes
     const { data: criado, error } = await criarConferente({ nome: novoNome, usuario: novoUsuario, senha: novaSenha, admin: novoAdmin });
     if (error) return setErro(error);
     if (criado?.id && !novoAdmin && setPermissoes) setPermissoes((prev) => ({ ...(prev || {}), [criado.id]: novoAcessos }));
+    if (criado?.id && !novoAdmin) gravarCaixa(criado.id, novoCaixa);
     setSucesso(`✅ Usuário ${novoNome} criado!`);
-    setNovoNome(""); setNovoUsuario(""); setNovaSenha(""); setNovoAdmin(false); setNovoAcessos(ACESSOS_PADRAO);
+    setNovoNome(""); setNovoUsuario(""); setNovaSenha(""); setNovoAdmin(false); setNovoAcessos(ACESSOS_PADRAO); setNovoCaixa(["principal"]);
     await carregar();
     onMudanca && onMudanca();
     setTimeout(() => setSucesso(""), 3000);
@@ -2922,6 +3009,12 @@ function ConferentesTab({ currentUser, onMudanca, permissoes = {}, setPermissoes
 
         {!novoAdmin && (
           <div style={{ marginBottom: 14 }}>
+            {unidadesCaixa.length > 1 && (
+              <div style={{ marginBottom: 12 }}>
+                <label style={labelStyle}>🏪 Em qual caixa (unidade) ele trabalha?</label>
+                <EscolherUnidadesCaixa unidades={unidadesCaixa} valor={novoCaixa} onChange={setNovoCaixa} />
+              </div>
+            )}
             <label style={labelStyle}>🔐 O que este usuário pode acessar</label>
             <EscolherAcessos valor={novoAcessos} onChange={setNovoAcessos} />
           </div>
@@ -2961,7 +3054,10 @@ function ConferentesTab({ currentUser, onMudanca, permissoes = {}, setPermissoes
                       🔐 {c.admin ? <span style={{ color: "#F97316" }}>Administrador — acessa tudo</span> : (() => {
                         const l = acessosDe(c, permissoes);
                         if (l.length === 0) return <span style={{ color: "#FCA5A5" }}>Nenhuma aba liberada</span>;
-                        return ABAS_ACESSO.filter((a) => l.includes(a.key)).map((a) => a.label).join(" · ");
+                        const txt = ABAS_ACESSO.filter((a) => l.includes(a.key)).map((a) => a.label).join(" · ");
+                        const us = unidadesDe(c.id).map((id) => unidades.find((u) => u.id === id)?.nome).filter(Boolean);
+                        const cx = unidadesCaixaDe(c, permUnidades, unidadesCaixa).map((id) => unidadesCaixa.find((u) => u.id === id)?.nome).filter(Boolean);
+                        return (unidadesCaixa.length > 1 ? `🏪 Caixa: ${cx.join(", ")}  |  ` : "") + txt + (l.includes("folha") && us.length > 0 ? `  (Folha só: ${us.join(", ")})` : "");
                       })()}
                     </div>
                   </div>
@@ -2971,7 +3067,32 @@ function ConferentesTab({ currentUser, onMudanca, permissoes = {}, setPermissoes
                   {editandoAcessoId === c.id ? (
                     <div style={{ width: "100%", background: "#0F172A", border: "1px solid #334155", borderRadius: 10, padding: 12 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#F1F5F9", marginBottom: 8 }}>🔐 Acessos de {c.nome}</div>
+                      {unidadesCaixa.length > 1 && (
+                        <div style={{ marginBottom: 12 }}>
+                          <label style={labelStyle}>🏪 Em qual caixa (unidade) ele trabalha?</label>
+                          <EscolherUnidadesCaixa unidades={unidadesCaixa} valor={caixaInput} onChange={setCaixaInput} />
+                          <div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>Nenhuma marcada = {unidadesCaixa[0]?.nome}.</div>
+                        </div>
+                      )}
+                      <label style={labelStyle}>📑 Abas que ele pode ver</label>
                       <EscolherAcessos valor={acessoInput} onChange={setAcessoInput} />
+                      {acessoInput.includes("folha") && unidades.length > 1 && (
+                        <div style={{ marginTop: 12 }}>
+                          <label style={labelStyle}>🏢 Na Folha, quais unidades ele pode ver?</label>
+                          <div style={{ fontSize: 11, color: "#64748B", marginBottom: 6 }}>Nenhuma marcada = vê todas as unidades.</div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {unidades.map((u) => {
+                              const on = unidInput.includes(u.id);
+                              return (
+                                <label key={u.id} style={{ display: "flex", alignItems: "center", gap: 8, background: on ? "#172554" : "#0F172A", border: `1px solid ${on ? "#3B82F6" : "#334155"}`, borderRadius: 8, padding: "7px 10px", cursor: "pointer", fontSize: 13, color: "#F1F5F9" }}>
+                                  <input type="checkbox" checked={on} onChange={() => setUnidInput(on ? unidInput.filter((x) => x !== u.id) : [...unidInput, u.id])} style={{ width: 16, height: 16, cursor: "pointer" }} />
+                                  🏢 {u.nome}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                       <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
                         <button style={{ ...miniBtn, background: "#10B981" }} onClick={() => salvarAcessos(c.id)}>✓ Salvar acessos</button>
                         <button style={{ ...miniBtn, background: "#374151" }} onClick={() => setEditandoAcessoId(null)}>Cancelar</button>
@@ -2995,7 +3116,7 @@ function ConferentesTab({ currentUser, onMudanca, permissoes = {}, setPermissoes
                       <button style={{ ...miniBtn, background: "#2563EB" }} onClick={() => { setEditandoSenhaId(c.id); setSenhaInput(""); }}>🔑 Mudar senha</button>
                       {c.id !== currentUser.id && (
                         <>
-                          {!c.admin && <button style={{ ...miniBtn, background: "#0891B2" }} onClick={() => { setEditandoAcessoId(c.id); setAcessoInput(acessosDe(c, permissoes)); }}>🔐 Acessos</button>}
+                          {!c.admin && <button style={{ ...miniBtn, background: "#0891B2" }} onClick={() => { setEditandoAcessoId(c.id); setAcessoInput(acessosDe(c, permissoes)); setUnidInput(unidadesDe(c.id)); setCaixaInput(unidadesCaixaDe(c, permUnidades, unidadesCaixa)); }}>🔐 Acessos</button>}
                           <button style={{ ...miniBtn, background: c.admin ? "#374151" : "#F97316" }} onClick={() => toggleAdmin(c)}>
                             {c.admin ? "Remover admin" : "🛡️ Tornar admin"}
                           </button>
@@ -3017,9 +3138,63 @@ function ConferentesTab({ currentUser, onMudanca, permissoes = {}, setPermissoes
   );
 }
 
-function ConfiguracaoTab({ sub, setSub, usuarios, formas, backup }) {
+function UnidadesCaixaCard({ unidades, setUnidades }) {
+  const [nome, setNome] = useState("");
+  const [editId, setEditId] = useState(null);
+  const [editNome, setEditNome] = useState("");
+  const adicionar = () => {
+    const n = nome.trim();
+    if (!n) return alert("Digite o nome da unidade.");
+    const base = n.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "").slice(0, 20) || "unidade";
+    let id = base, i = 2;
+    while (unidades.some((u) => u.id === id) || id === "principal") id = base + i++;
+    setUnidades([...unidades, { id, nome: n }]);
+    setNome("");
+  };
+  const salvarNome = (id) => {
+    if (!editNome.trim()) return alert("O nome não pode ficar em branco.");
+    setUnidades(unidades.map((u) => (u.id === id ? { ...u, nome: editNome.trim() } : u)));
+    setEditId(null);
+  };
+  return (
+    <div style={card}>
+      <h2 style={cardTitle}>🏢 Unidades do Caixa</h2>
+      <div style={{ fontSize: 12, color: "#64748B", marginBottom: 14 }}>
+        Cada unidade tem o seu próprio caixa: vendedores, entrada, prestação, histórico, recibos, comodato e abastecimento ficam separados.
+        Troque de unidade no seletor 🏢 no alto da tela.
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+        {unidades.map((u) => (
+          <div key={u.id} style={{ ...itemCard, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {editId === u.id ? (
+              <>
+                <input style={{ ...inputStyle, width: 260, padding: "6px 10px" }} value={editNome} onChange={(e) => setEditNome(e.target.value)} autoFocus />
+                <button style={{ ...miniBtn, background: "#10B981" }} onClick={() => salvarNome(u.id)}>✓ Salvar</button>
+                <button style={{ ...miniBtn, background: "#374151" }} onClick={() => setEditId(null)}>Cancelar</button>
+              </>
+            ) : (
+              <>
+                <span style={{ fontWeight: 700, color: "#F1F5F9" }}>🏢 {u.nome}</span>
+                {u.id === UNIDADE_CAIXA && <span style={{ fontSize: 10, background: "#10B98122", color: "#10B981", border: "1px solid #10B98155", borderRadius: 10, padding: "2px 8px" }}>ABERTA AGORA</span>}
+                <button style={{ ...miniBtn, background: "#7C3AED", marginLeft: "auto" }} onClick={() => { setEditId(u.id); setEditNome(u.nome); }}>✏️ Renomear</button>
+                {u.id !== UNIDADE_CAIXA && <button style={{ ...miniBtn, background: "#2563EB" }} onClick={() => trocarUnidadeCaixa(u.id)}>Abrir este caixa</button>}
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input style={inputStyle} value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome da nova unidade (ex: GP Picos)" />
+        <button style={{ ...btn, background: "#10B981", whiteSpace: "nowrap" }} onClick={adicionar}>➕ Adicionar</button>
+      </div>
+    </div>
+  );
+}
+
+function ConfiguracaoTab({ sub, setSub, usuarios, formas, backup, unidades }) {
   const subs = [
     { key: "usuarios", label: "👥 Usuários e acessos" },
+    { key: "unidades", label: "🏢 Unidades" },
     { key: "formas", label: "💳 Formas de pagamento" },
     { key: "backup", label: "💾 Backup" },
   ];
@@ -3034,6 +3209,7 @@ function ConfiguracaoTab({ sub, setSub, usuarios, formas, backup }) {
         ))}
       </div>
       {sub === "usuarios" && usuarios}
+      {sub === "unidades" && unidades}
       {sub === "formas" && formas}
       {sub === "backup" && backup}
     </div>
@@ -3112,17 +3288,26 @@ export default function App() {
   };
 
   // Estado agora vem da NUVEM (Supabase). Mantém backup no localStorage.
-  const [formas, setFormas, formasLoaded] = useCloudState("formas", PAYMENT_TYPES_PADRAO);
-  const [vendedores, setVendedores, vendedoresLoaded] = useCloudState("vendedores", []);
-  const [historico, setHistorico, historicoLoaded] = useCloudState("historico", []);
-  const [cadastros, setCadastros, cadastrosLoaded] = useCloudState("cadastros", []);
-  const [empresas, setEmpresas, empresasLoaded] = useCloudState("empresas", []);
-  const [recibos, setRecibos, recibosLoaded] = useCloudState("recibos", []);
-  const [motos, setMotos, motosLoaded] = useCloudState("motos", []);
-  const [abastecimentos, setAbastecimentos, abastecimentosLoaded] = useCloudState("abastecimentos", []);
-  const [abastConfig, setAbastConfig, abastConfigLoaded] = useCloudState("abastecimento_config", {});
-  const [comodatos, setComodatos, comodatosLoaded] = useCloudState("comodatos", []);
+  const [formas, setFormas, formasLoaded] = useCloudState(chaveUnidade("formas"), PAYMENT_TYPES_PADRAO);
+  const [vendedores, setVendedores, vendedoresLoaded] = useCloudState(chaveUnidade("vendedores"), []);
+  const [historico, setHistorico, historicoLoaded] = useCloudState(chaveUnidade("historico"), []);
+  const [cadastros, setCadastros, cadastrosLoaded] = useCloudState(chaveUnidade("cadastros"), []);
+  const [empresas, setEmpresas, empresasLoaded] = useCloudState(chaveUnidade("empresas"), []);
+  const [recibos, setRecibos, recibosLoaded] = useCloudState(chaveUnidade("recibos"), []);
+  const [motos, setMotos, motosLoaded] = useCloudState(chaveUnidade("motos"), []);
+  const [abastecimentos, setAbastecimentos, abastecimentosLoaded] = useCloudState(chaveUnidade("abastecimentos"), []);
+  const [abastConfig, setAbastConfig, abastConfigLoaded] = useCloudState(chaveUnidade("abastecimento_config"), {});
+  const [comodatos, setComodatos, comodatosLoaded] = useCloudState(chaveUnidade("comodatos"), []);
   const [permissoes, setPermissoes] = useCloudState("permissoes_usuarios", {});
+  const [unidadesCaixa, setUnidadesCaixa, unidCaixaLoaded] = useCloudState("caixa_unidades", UNIDADES_CAIXA_PADRAO);
+  const [permUnidades, setPermUnidades, permUnidLoaded] = useCloudState("permissoes_unidades", {});
+  const minhasUnidades = unidadesCaixaDe(currentUser, permUnidades, unidadesCaixa);
+  const unidadeAtual = (unidadesCaixa || []).find((u) => u.id === UNIDADE_CAIXA) || { id: UNIDADE_CAIXA, nome: UNIDADE_CAIXA };
+  useEffect(() => {
+    if (!currentUser || !permUnidLoaded || !unidCaixaLoaded) return;
+    if (minhasUnidades.length > 0 && !minhasUnidades.includes(UNIDADE_CAIXA)) trocarUnidadeCaixa(minhasUnidades[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id, currentUser?.admin, permUnidLoaded, unidCaixaLoaded, minhasUnidades.join(",")]);
   const [subConfig, setSubConfig] = useState("usuarios");
   const acessos = acessosDe(currentUser, permissoes);
   const pode = (k) => acessos.includes(k);
@@ -3262,12 +3447,22 @@ export default function App() {
         <div>
           <div style={logo}>🏪 CaixaFácil</div>
           <div style={subLogo}>Sistema de Prestação de Contas · {nuvem ? "☁️ Nuvem" : "💾 Local"}</div>
+          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {minhasUnidades.length > 1 ? (
+              <select value={UNIDADE_CAIXA} onChange={(e) => trocarUnidadeCaixa(e.target.value)} title="Trocar de unidade"
+                style={{ background: UNIDADE_CAIXA === "principal" ? "#052e16" : "#172554", color: "#F1F5F9", border: `1px solid ${UNIDADE_CAIXA === "principal" ? "#10B981" : "#3B82F6"}`, borderRadius: 8, padding: "5px 10px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                {unidadesCaixa.filter((u) => minhasUnidades.includes(u.id)).map((u) => <option key={u.id} value={u.id}>🏢 {u.nome}</option>)}
+              </select>
+            ) : (
+              <span style={{ background: UNIDADE_CAIXA === "principal" ? "#052e16" : "#172554", color: "#F1F5F9", border: `1px solid ${UNIDADE_CAIXA === "principal" ? "#10B981" : "#3B82F6"}`, borderRadius: 8, padding: "5px 10px", fontSize: 13, fontWeight: 700 }}>🏢 {unidadeAtual.nome}</span>
+            )}
+          </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           {nuvem ? <SyncBadge /> : (
             <div style={{ fontSize: 11, color: "#10B981", background: "#052e16", border: "1px solid #10B98155", borderRadius: 8, padding: "5px 10px" }}>💾 Salvo automaticamente</div>
           )}
-          {vendedores.length > 0 && (
+          {vendedores.length > 0 && (pode("resumo") || pode("entrada") || pode("contas")) && (
             <>
               <div style={totalGeralBox}>
                 <div style={{ fontSize: 10, color: "#64748B", marginBottom: 2, textTransform: "uppercase" }}>Total do Dia</div>
@@ -3282,7 +3477,7 @@ export default function App() {
               </button>
             </>
           )}
-          {historico.length > 0 && vendedores.length === 0 && (
+          {historico.length > 0 && vendedores.length === 0 && pode("historico") && (
             <div style={{ fontSize: 11, color: "#64748B", background: "#0F172A", border: "1px solid #1E293B", borderRadius: 8, padding: "5px 10px" }}>
               📅 {historico.length} fechamento(s) no histórico
             </div>
@@ -3475,10 +3670,12 @@ export default function App() {
         {aba === "calculadora" && <CalculadoraTab />}
         {aba === "configuracao" && (
           <ConfiguracaoTab sub={subConfig} setSub={setSubConfig}
-            usuarios={<ConferentesTab currentUser={currentUser} onMudanca={recarregarConferentes} permissoes={permissoes} setPermissoes={setPermissoes} />}
+            usuarios={<ConferentesTab currentUser={currentUser} onMudanca={recarregarConferentes} permissoes={permissoes} setPermissoes={setPermissoes}
+              unidadesCaixa={unidadesCaixa} permUnidades={permUnidades} setPermUnidades={setPermUnidades} />}
+            unidades={<UnidadesCaixaCard unidades={unidadesCaixa} setUnidades={setUnidadesCaixa} />}
             formas={<ConfigTab formas={formas} setFormas={setFormas} />}
             backup={
-          <BackupTab
+          <BackupTab unidadeNome={unidadeAtual.nome}
             dados={{ vendedores, historico, cadastros, formas, empresas, recibos, motos, abastecimentos, abastecimento_config: abastConfig, comodatos, permissoes_usuarios: permissoes }}
             onImportar={(dados) => {
               if (dados.vendedores) setVendedores(dados.vendedores);
