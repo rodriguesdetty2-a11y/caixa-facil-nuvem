@@ -2751,7 +2751,58 @@ function MensagensTab({ cadastros, vendedores, currentUser }) {
   );
 }
 
-function ConferentesTab({ currentUser, onMudanca }) {
+/* ══════ PERMISSÕES POR USUÁRIO ══════
+   Ficam na nuvem (app_state, chave "permissoes_usuarios"): { [idDoUsuario]: ["entrada","contas",...] }
+   Administrador sempre vê tudo. Usuário sem permissões salvas usa ACESSOS_PADRAO. */
+export const ABAS_ACESSO = [
+  { key: "cadastros", label: "👥 Vendedores" },
+  { key: "entrada", label: "📥 Entrada" },
+  { key: "contas", label: "🧾 Prestação" },
+  { key: "resumo", label: "📊 Resumo" },
+  { key: "mensagens", label: "💬 Mensagens" },
+  { key: "impressao", label: "🖨️ Imprimir" },
+  { key: "recibos", label: "🧾 Recibos" },
+  { key: "relatorio", label: "📊 Relatório" },
+  { key: "comodato", label: "📦 Comodato" },
+  { key: "abastecimento", label: "⛽ Abastecimento" },
+  { key: "historico", label: "📅 Histórico" },
+  { key: "folha", label: "📋 Folha" },
+  { key: "calculadora", label: "🧮 Calculadora" },
+];
+export const ACESSOS_PADRAO = ABAS_ACESSO.map((a) => a.key).filter((k) => k !== "folha");
+export function acessosDe(usuario, permissoes) {
+  if (!usuario) return ABAS_ACESSO.map((a) => a.key);
+  if (usuario.admin) return ABAS_ACESSO.map((a) => a.key).concat(["configuracao"]);
+  const lista = permissoes && Array.isArray(permissoes[usuario.id]) ? permissoes[usuario.id] : ACESSOS_PADRAO;
+  return lista;
+}
+
+function EscolherAcessos({ valor, onChange }) {
+  const marcados = new Set(valor);
+  const alternar = (k) => {
+    const n = new Set(marcados);
+    n.has(k) ? n.delete(k) : n.add(k);
+    onChange(ABAS_ACESSO.map((a) => a.key).filter((x) => n.has(x)));
+  };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+        <button type="button" style={{ ...miniBtn, background: "#10B981" }} onClick={() => onChange(ABAS_ACESSO.map((a) => a.key))}>✅ Marcar todas</button>
+        <button type="button" style={{ ...miniBtn, background: "#374151" }} onClick={() => onChange([])}>⬜ Desmarcar todas</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))", gap: 6 }}>
+        {ABAS_ACESSO.map((a) => (
+          <label key={a.key} style={{ display: "flex", alignItems: "center", gap: 8, background: marcados.has(a.key) ? "#052e16" : "#0F172A", border: `1px solid ${marcados.has(a.key) ? "#10B98155" : "#334155"}`, borderRadius: 8, padding: "7px 10px", cursor: "pointer", fontSize: 13, color: "#F1F5F9" }}>
+            <input type="checkbox" checked={marcados.has(a.key)} onChange={() => alternar(a.key)} style={{ width: 16, height: 16, cursor: "pointer" }} />
+            {a.label}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ConferentesTab({ currentUser, onMudanca, permissoes = {}, setPermissoes }) {
   const [conferentes, setConferentes] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [novoNome, setNovoNome] = useState("");
@@ -2764,6 +2815,15 @@ function ConferentesTab({ currentUser, onMudanca }) {
   const [senhaInput, setSenhaInput] = useState("");
   const [editandoNomeId, setEditandoNomeId] = useState(null);
   const [nomeInput, setNomeInput] = useState("");
+  const [novoAcessos, setNovoAcessos] = useState(ACESSOS_PADRAO);
+  const [editandoAcessoId, setEditandoAcessoId] = useState(null);
+  const [acessoInput, setAcessoInput] = useState([]);
+
+  const salvarAcessos = (id) => {
+    setPermissoes && setPermissoes((prev) => ({ ...(prev || {}), [id]: acessoInput }));
+    setEditandoAcessoId(null);
+    alert("✅ Acessos salvos! O usuário verá as abas novas em alguns segundos.");
+  };
 
   const carregar = async () => {
     setCarregando(true);
@@ -2779,10 +2839,11 @@ function ConferentesTab({ currentUser, onMudanca }) {
     if (!novoNome.trim()) return setErro("Digite o nome completo.");
     if (!novoUsuario.trim()) return setErro("Digite um nome de usuário.");
     if (novaSenha.length < 4) return setErro("Senha deve ter pelo menos 4 caracteres.");
-    const { error } = await criarConferente({ nome: novoNome, usuario: novoUsuario, senha: novaSenha, admin: novoAdmin });
+    const { data: criado, error } = await criarConferente({ nome: novoNome, usuario: novoUsuario, senha: novaSenha, admin: novoAdmin });
     if (error) return setErro(error);
+    if (criado?.id && !novoAdmin && setPermissoes) setPermissoes((prev) => ({ ...(prev || {}), [criado.id]: novoAcessos }));
     setSucesso(`✅ Usuário ${novoNome} criado!`);
-    setNovoNome(""); setNovoUsuario(""); setNovaSenha(""); setNovoAdmin(false);
+    setNovoNome(""); setNovoUsuario(""); setNovaSenha(""); setNovoAdmin(false); setNovoAcessos(ACESSOS_PADRAO);
     await carregar();
     onMudanca && onMudanca();
     setTimeout(() => setSucesso(""), 3000);
@@ -2832,7 +2893,7 @@ function ConferentesTab({ currentUser, onMudanca }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={card}>
-        <h2 style={cardTitle}>➕ Adicionar Conferente</h2>
+        <h2 style={cardTitle}>➕ Adicionar Usuário</h2>
         <div style={{ fontSize: 12, color: "#64748B", marginBottom: 16 }}>
           Pessoas que vão fazer login para conferir as prestações de contas.
         </div>
@@ -2855,9 +2916,16 @@ function ConferentesTab({ currentUser, onMudanca }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
           <input id="novoAdmin" type="checkbox" checked={novoAdmin} onChange={(e) => setNovoAdmin(e.target.checked)} style={{ width: 16, height: 16, cursor: "pointer" }} />
           <label htmlFor="novoAdmin" style={{ fontSize: 13, color: "#F1F5F9", cursor: "pointer" }}>
-            🛡️ Administrador (pode gerenciar outros usuários)
+            🛡️ Administrador (vê tudo e pode gerenciar outros usuários)
           </label>
         </div>
+
+        {!novoAdmin && (
+          <div style={{ marginBottom: 14 }}>
+            <label style={labelStyle}>🔐 O que este usuário pode acessar</label>
+            <EscolherAcessos valor={novoAcessos} onChange={setNovoAcessos} />
+          </div>
+        )}
 
         {erro && <div style={{ background: "#450a0a", border: "1px solid #EF444455", borderRadius: 8, padding: "10px 14px", color: "#FCA5A5", fontSize: 13, marginBottom: 10 }}>⚠️ {erro}</div>}
         {sucesso && <div style={{ background: "#052e16", border: "1px solid #10B98155", borderRadius: 8, padding: "10px 14px", color: "#10B981", fontSize: 13, marginBottom: 10 }}>{sucesso}</div>}
@@ -2868,7 +2936,7 @@ function ConferentesTab({ currentUser, onMudanca }) {
       </div>
 
       <div style={card}>
-        <h2 style={cardTitle}>👥 Conferentes Cadastrados ({conferentes.length})</h2>
+        <h2 style={cardTitle}>👥 Usuários Cadastrados ({conferentes.length})</h2>
         {carregando ? (
           <div style={{ color: "#64748B", textAlign: "center", padding: 20 }}>Carregando...</div>
         ) : conferentes.length === 0 ? (
@@ -2889,11 +2957,27 @@ function ConferentesTab({ currentUser, onMudanca }) {
                       🔖 <code style={{ background: "#0F172A", padding: "1px 6px", borderRadius: 4 }}>{c.usuario}</code>
                       {c.criado_em && <span style={{ marginLeft: 10 }}>· criado em {new Date(c.criado_em).toLocaleDateString("pt-BR")}</span>}
                     </div>
+                    <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 6 }}>
+                      🔐 {c.admin ? <span style={{ color: "#F97316" }}>Administrador — acessa tudo</span> : (() => {
+                        const l = acessosDe(c, permissoes);
+                        if (l.length === 0) return <span style={{ color: "#FCA5A5" }}>Nenhuma aba liberada</span>;
+                        return ABAS_ACESSO.filter((a) => l.includes(a.key)).map((a) => a.label).join(" · ");
+                      })()}
+                    </div>
                   </div>
                 </div>
 
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-                  {editandoNomeId === c.id ? (
+                  {editandoAcessoId === c.id ? (
+                    <div style={{ width: "100%", background: "#0F172A", border: "1px solid #334155", borderRadius: 10, padding: 12 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#F1F5F9", marginBottom: 8 }}>🔐 Acessos de {c.nome}</div>
+                      <EscolherAcessos valor={acessoInput} onChange={setAcessoInput} />
+                      <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+                        <button style={{ ...miniBtn, background: "#10B981" }} onClick={() => salvarAcessos(c.id)}>✓ Salvar acessos</button>
+                        <button style={{ ...miniBtn, background: "#374151" }} onClick={() => setEditandoAcessoId(null)}>Cancelar</button>
+                      </div>
+                    </div>
+                  ) : editandoNomeId === c.id ? (
                     <>
                       <input style={{ ...inputStyle, width: 240, padding: "5px 10px", fontSize: 12 }} type="text" value={nomeInput} onChange={(e) => setNomeInput(e.target.value)} placeholder="Novo nome completo" autoFocus />
                       <button style={{ ...miniBtn, background: "#10B981" }} onClick={() => salvarNome(c.id)}>✓ Salvar nome</button>
@@ -2911,6 +2995,7 @@ function ConferentesTab({ currentUser, onMudanca }) {
                       <button style={{ ...miniBtn, background: "#2563EB" }} onClick={() => { setEditandoSenhaId(c.id); setSenhaInput(""); }}>🔑 Mudar senha</button>
                       {c.id !== currentUser.id && (
                         <>
+                          {!c.admin && <button style={{ ...miniBtn, background: "#0891B2" }} onClick={() => { setEditandoAcessoId(c.id); setAcessoInput(acessosDe(c, permissoes)); }}>🔐 Acessos</button>}
                           <button style={{ ...miniBtn, background: c.admin ? "#374151" : "#F97316" }} onClick={() => toggleAdmin(c)}>
                             {c.admin ? "Remover admin" : "🛡️ Tornar admin"}
                           </button>
@@ -2928,6 +3013,29 @@ function ConferentesTab({ currentUser, onMudanca }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ConfiguracaoTab({ sub, setSub, usuarios, formas, backup }) {
+  const subs = [
+    { key: "usuarios", label: "👥 Usuários e acessos" },
+    { key: "formas", label: "💳 Formas de pagamento" },
+    { key: "backup", label: "💾 Backup" },
+  ];
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {subs.map((x) => (
+          <button key={x.key} onClick={() => setSub(x.key)}
+            style={{ ...btn, padding: "8px 14px", background: sub === x.key ? "#10B981" : "#1E293B", color: sub === x.key ? "#000" : "#CBD5E1", border: "1px solid #334155" }}>
+            {x.label}
+          </button>
+        ))}
+      </div>
+      {sub === "usuarios" && usuarios}
+      {sub === "formas" && formas}
+      {sub === "backup" && backup}
     </div>
   );
 }
@@ -2974,8 +3082,27 @@ export default function App() {
   useEffect(() => {
     if (authEstado === "ok" && isSupabaseReady()) {
       recarregarConferentes();
+      const t = setInterval(recarregarConferentes, 60000);
+      return () => clearInterval(t);
     }
   }, [authEstado]);
+
+  // Mantém o usuário logado atualizado (ex.: admin removido ou usuário desativado)
+  useEffect(() => {
+    if (!currentUser || conferentesLista.length === 0) return;
+    const eu = conferentesLista.find((c) => c.id === currentUser.id);
+    if (!eu) return;
+    if (!eu.ativo) {
+      alert("Seu usuário foi desativado. Fale com o administrador.");
+      removerUsuarioLogado(); setCurrentUser(null); setAuthEstado("login");
+      return;
+    }
+    if (eu.admin !== currentUser.admin || eu.nome !== currentUser.nome) {
+      const novo = { ...currentUser, admin: eu.admin, nome: eu.nome };
+      salvarUsuarioLogado(novo); setCurrentUser(novo);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conferentesLista]);
 
   const sair = () => {
     if (!confirm("Deseja sair?")) return;
@@ -2995,6 +3122,17 @@ export default function App() {
   const [abastecimentos, setAbastecimentos, abastecimentosLoaded] = useCloudState("abastecimentos", []);
   const [abastConfig, setAbastConfig, abastConfigLoaded] = useCloudState("abastecimento_config", {});
   const [comodatos, setComodatos, comodatosLoaded] = useCloudState("comodatos", []);
+  const [permissoes, setPermissoes] = useCloudState("permissoes_usuarios", {});
+  const [subConfig, setSubConfig] = useState("usuarios");
+  const acessos = acessosDe(currentUser, permissoes);
+  const pode = (k) => acessos.includes(k);
+  const chaveAba = (a) => (a === "ver_fechamento" || a === "editar_fechamento") ? "historico" : a;
+  useEffect(() => {
+    if (aba === "sem_acesso") { if (acessos.length > 0) setAba(acessos[0]); return; }
+    if (!pode(chaveAba(aba))) setAba(acessos[0] || "sem_acesso");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aba, acessos.join(",")]);
+
   const [vendedorRelatorio, setVendedorRelatorio] = useState("");
   const allLoaded = formasLoaded && vendedoresLoaded && historicoLoaded && cadastrosLoaded && empresasLoaded && recibosLoaded && motosLoaded && abastecimentosLoaded && abastConfigLoaded && comodatosLoaded;
 
@@ -3168,54 +3306,50 @@ export default function App() {
       </div>
 
       <div style={{ ...tabBar, overflowX: "auto" }}>
-        <button style={aba === "cadastros" ? tabActive : tabInactive} onClick={() => setAba("cadastros")}>
+        {pode("cadastros") && (<button style={aba === "cadastros" ? tabActive : tabInactive} onClick={() => setAba("cadastros")}>
           👥 Vendedores
           {cadastros.length > 0 && <span style={{ marginLeft: 5, background: "#F97316", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 10, padding: "1px 6px" }}>{cadastros.length}</span>}
-        </button>
-        <button style={aba === "entrada" ? tabActive : tabInactive} onClick={() => setAba("entrada")}>📥 Entrada</button>
-        <button style={aba === "contas" ? tabActive : tabInactive} onClick={() => setAba("contas")}>🧾 Prestação</button>
-        <button style={aba === "resumo" ? tabActive : tabInactive} onClick={() => setAba("resumo")}>
+        </button>)}
+        {pode("entrada") && (<button style={aba === "entrada" ? tabActive : tabInactive} onClick={() => setAba("entrada")}>📥 Entrada</button>)}
+        {pode("contas") && (<button style={aba === "contas" ? tabActive : tabInactive} onClick={() => setAba("contas")}>🧾 Prestação</button>)}
+        {pode("resumo") && (<button style={aba === "resumo" ? tabActive : tabInactive} onClick={() => setAba("resumo")}>
           📊 Resumo
           {vendedores.length > 0 && <span style={{ marginLeft: 5, background: "#10B981", color: "#000", fontSize: 10, fontWeight: 800, borderRadius: 10, padding: "1px 6px" }}>{vendedores.length}</span>}
-        </button>
-        <button style={aba === "mensagens" ? tabActive : tabInactive} onClick={() => setAba("mensagens")}>💬 Mensagens</button>
-        <button style={aba === "impressao" ? tabActive : tabInactive} onClick={() => setAba("impressao")}>🖨️ Imprimir</button>
-        <button style={aba === "recibos" ? tabActive : tabInactive} onClick={() => setAba("recibos")}>🧾 Recibos</button>
-        <button style={aba === "relatorio" ? tabActive : tabInactive} onClick={() => { setVendedorRelatorio(""); setAba("relatorio"); }}>📊 Relatório</button>
-        <button style={aba === "comodato" ? tabActive : tabInactive} onClick={() => setAba("comodato")}>
+        </button>)}
+        {pode("mensagens") && (<button style={aba === "mensagens" ? tabActive : tabInactive} onClick={() => setAba("mensagens")}>💬 Mensagens</button>)}
+        {pode("impressao") && (<button style={aba === "impressao" ? tabActive : tabInactive} onClick={() => setAba("impressao")}>🖨️ Imprimir</button>)}
+        {pode("recibos") && (<button style={aba === "recibos" ? tabActive : tabInactive} onClick={() => setAba("recibos")}>🧾 Recibos</button>)}
+        {pode("relatorio") && (<button style={aba === "relatorio" ? tabActive : tabInactive} onClick={() => { setVendedorRelatorio(""); setAba("relatorio"); }}>📊 Relatório</button>)}
+        {pode("comodato") && (<button style={aba === "comodato" ? tabActive : tabInactive} onClick={() => setAba("comodato")}>
           📦 Comodato
           {comodatosVencidos > 0 && <span style={{ marginLeft: 5, background: "#EF4444", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 10, padding: "1px 6px" }}>{comodatosVencidos}</span>}
-        </button>
-        <button style={aba === "abastecimento" ? tabActive : tabInactive} onClick={() => setAba("abastecimento")}>
+        </button>)}
+        {pode("abastecimento") && (<button style={aba === "abastecimento" ? tabActive : tabInactive} onClick={() => setAba("abastecimento")}>
           ⛽ Abastecimento
           {alertasAbast > 0 && <span style={{ marginLeft: 5, background: "#EF4444", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 10, padding: "1px 6px" }}>{alertasAbast}</span>}
-        </button>
-        <button style={aba === "historico" ? tabActive : tabInactive} onClick={() => setAba("historico")}>
+        </button>)}
+        {pode("historico") && (<button style={aba === "historico" ? tabActive : tabInactive} onClick={() => setAba("historico")}>
           📅 Histórico
           {historico.length > 0 && <span style={{ marginLeft: 5, background: "#7C3AED", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 10, padding: "1px 6px" }}>{historico.length}</span>}
-        </button>
-        {currentUser?.admin && (
+        </button>)}
+        {pode("folha") && (
           <button style={aba === "folha" ? tabActive : tabInactive} onClick={() => setAba("folha")}>📋 Folha</button>
         )}
-        {currentUser?.admin && (
-          <button style={aba === "conferentes" ? tabActive : tabInactive} onClick={() => setAba("conferentes")}>
-            🕵️ Conferentes
-          </button>
-        )}
-        <button style={aba === "calculadora" ? tabActive : tabInactive} onClick={() => setAba("calculadora")}>🧮 Calculadora</button>
-        {currentUser?.admin && (
-          <button style={aba === "config" ? tabActive : tabInactive} onClick={() => setAba("config")}>⚙️ Config</button>
-        )}
-        {currentUser?.admin && (
-          <button style={aba === "backup" ? tabActive : tabInactive} onClick={() => setAba("backup")}>💾 Backup</button>
+        {pode("calculadora") && (<button style={aba === "calculadora" ? tabActive : tabInactive} onClick={() => setAba("calculadora")}>🧮 Calculadora</button>)}
+        {pode("configuracao") && (
+          <button style={aba === "configuracao" ? tabActive : tabInactive} onClick={() => setAba("configuracao")}>⚙️ Configuração</button>
         )}
       </div>
 
       <div style={content}>
+        {aba === "sem_acesso" && (
+          <div style={{ ...card, textAlign: "center", color: "#FCA5A5" }}>🔒 Seu usuário ainda não tem nenhuma aba liberada. Fale com o administrador.</div>
+        )}
+        {pode(chaveAba(aba)) && <>
         {aba === "cadastros" && <CadastroVendedoresTab cadastros={cadastros} setCadastros={setCadastros} currentUser={currentUser} abrirRelatorio={(nome) => { setVendedorRelatorio(nome); setAba("relatorio"); }} />}
         {aba === "entrada" && <EntradaTab vendedores={vendedoresAtual} setVendedores={setVendedores} formas={formas} cadastros={cadastros} />}
         {aba === "contas" && <PrestaContasTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} cadastros={cadastros} currentUser={currentUser} conferentesLista={conferentesLista} />}
-        {aba === "folha" && currentUser?.admin && <FolhaModulo currentUser={currentUser} />}
+        {aba === "folha" && <FolhaModulo currentUser={currentUser} />}
         {aba === "relatorio" && (
           <RelatorioVendedores cadastros={cadastros} historico={historico} vendedorInicial={vendedorRelatorio}
             onAbrirDia={(id) => { const f = historico.find((x) => x.id === id); if (f) { setFechamentoVer(f); setAba("ver_fechamento"); } }} />
@@ -3226,7 +3360,6 @@ export default function App() {
             config={abastConfig} setConfig={setAbastConfig} cadastros={cadastros} currentUser={currentUser} />
         )}
         {aba === "recibos" && <RecibosTab currentUser={currentUser} empresas={empresas} setEmpresas={setEmpresas} recibos={recibos} setRecibos={setRecibos} />}
-        {aba === "conferentes" && currentUser?.admin && <ConferentesTab currentUser={currentUser} onMudanca={recarregarConferentes} />}
         {aba === "resumo" && <ResumoTab vendedores={vendedoresAtual} formas={formas} fecharDia={fecharDia} conferentesLista={conferentesLista} />}
         {aba === "impressao" && <ImpressaoTab vendedores={vendedoresAtual} formas={formas} conferentesLista={conferentesLista} />}
         {aba === "historico" && <HistoricoTab historico={historicoAtual} setHistorico={setHistorico} formas={formas}
@@ -3339,11 +3472,14 @@ export default function App() {
           />
         )}
         {aba === "mensagens" && <MensagensTab cadastros={cadastros} vendedores={vendedoresAtual} currentUser={currentUser} />}
-        {aba === "config" && currentUser?.admin && <ConfigTab formas={formas} setFormas={setFormas} />}
         {aba === "calculadora" && <CalculadoraTab />}
-        {aba === "backup" && currentUser?.admin && (
+        {aba === "configuracao" && (
+          <ConfiguracaoTab sub={subConfig} setSub={setSubConfig}
+            usuarios={<ConferentesTab currentUser={currentUser} onMudanca={recarregarConferentes} permissoes={permissoes} setPermissoes={setPermissoes} />}
+            formas={<ConfigTab formas={formas} setFormas={setFormas} />}
+            backup={
           <BackupTab
-            dados={{ vendedores, historico, cadastros, formas, empresas, recibos, motos, abastecimentos, abastecimento_config: abastConfig, comodatos }}
+            dados={{ vendedores, historico, cadastros, formas, empresas, recibos, motos, abastecimentos, abastecimento_config: abastConfig, comodatos, permissoes_usuarios: permissoes }}
             onImportar={(dados) => {
               if (dados.vendedores) setVendedores(dados.vendedores);
               if (dados.historico) setHistorico(dados.historico);
@@ -3355,11 +3491,13 @@ export default function App() {
               if (dados.abastecimentos) setAbastecimentos(dados.abastecimentos);
               if (dados.abastecimento_config) setAbastConfig(dados.abastecimento_config);
               if (dados.comodatos) setComodatos(dados.comodatos);
+              if (dados.permissoes_usuarios) setPermissoes(dados.permissoes_usuarios);
               alert("✅ Backup importado com sucesso!");
               setAba("entrada");
             }}
-          />
+          />} />
         )}
+        </>}
       </div>
     </div>
   );
