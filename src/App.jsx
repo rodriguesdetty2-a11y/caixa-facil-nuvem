@@ -259,8 +259,13 @@ const CEDULAS = [
   { valor: 0.05, label: "R$ 0,05", cor: "#67E8F9", emoji: "🔹" },
 ];
 
-function CalculadoraTab() {
+const valorCampo = (n) => r2(n).toFixed(2); // campo é type="number": usa ponto
+
+function CalculadoraTab({ vendedores = [], formas = [], onLancar, vendedorFixo = null }) {
   const [qtd, setQtd] = useState({});
+  const formaPadrao = (formas.find((f) => f.key === "deposito") || formas.find((f) => /dep[oó]sito/i.test(f.label)) || formas[0] || {}).key || "";
+  const [lancVend, setLancVend] = useState("");
+  const [lancForma, setLancForma] = useState(formaPadrao);
 
   const total = CEDULAS.reduce((s, c) => s + (parse(qtd[c.valor] || 0) * c.valor), 0);
   const totalNotas = CEDULAS.filter((c) => c.valor >= 2).reduce((s, c) => s + parse(qtd[c.valor] || 0), 0);
@@ -304,6 +309,44 @@ function CalculadoraTab() {
             </div>
           </div>
         </div>
+
+        {/* Lançar o total na prestação de um vendedor */}
+        {onLancar && (
+          <div style={{ background: "#0F172A", border: "1px solid #3B82F655", borderRadius: 12, padding: 14, marginBottom: 18 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#93C5FD", marginBottom: 10 }}>
+              📤 Lançar este total na prestação {vendedorFixo ? <>de <span style={{ color: "#F1F5F9" }}>{vendedorFixo.nome}</span></> : "do vendedor"}
+            </div>
+            {!vendedorFixo && vendedores.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#94A3B8" }}>Nenhum vendedor na entrada de hoje. Lance a entrada primeiro.</div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                {!vendedorFixo && <div style={{ flex: "2 1 200px" }}>
+                  <label style={labelStyle}>👤 Vendedor</label>
+                  <select style={inputStyle} value={lancVend} onChange={(e) => setLancVend(e.target.value)}>
+                    <option value="">-- Selecione --</option>
+                    {vendedores.map((v) => (
+                      <option key={v.id} value={v.id}>{v.nome}{v.prestacao ? " ✅ (já conferido)" : ""}</option>
+                    ))}
+                  </select>
+                </div>}
+                <div style={{ flex: "1 1 150px" }}>
+                  <label style={labelStyle}>💳 Lançar em</label>
+                  <select style={inputStyle} value={lancForma} onChange={(e) => setLancForma(e.target.value)}>
+                    {formas.map((f) => <option key={f.key} value={f.key}>{f.icon} {f.label}</option>)}
+                  </select>
+                </div>
+                <button style={{ ...btn, background: "#2563EB", whiteSpace: "nowrap", padding: "11px 16px" }}
+                  onClick={() => {
+                    if (total <= 0) return alert("A calculadora está zerada.");
+                    if (!vendedorFixo && !lancVend) return alert("Selecione o vendedor.");
+                    onLancar({ vendedorId: vendedorFixo ? vendedorFixo.id : Number(lancVend), forma: lancForma, valor: r2(total) });
+                  }}>
+                  📤 Lançar {fmt(total)}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Cédulas */}
         <div style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>
@@ -854,7 +897,7 @@ function EntradaTab({ vendedores, setVendedores, formas, cadastros }) {
 /* ══════════════════════════════════════
    ABA 2 — PRESTAÇÃO DE CONTAS
 ══════════════════════════════════════ */
-function PrestaContasTab({ vendedores, setVendedores, formas, cadastros, currentUser, conferentesLista }) {
+function PrestaContasTab({ vendedores, setVendedores, formas, cadastros, currentUser, conferentesLista, lancamento, onLancamentoUsado }) {
   const [selectedId, setSelectedId] = useState("");
   const [entregue, setEntregue] = useState(initValores(formas));
   const [confirmado, setConfirmado] = useState(false);
@@ -897,10 +940,48 @@ function PrestaContasTab({ vendedores, setVendedores, formas, cadastros, current
       prev.map((v) => v.id === Number(selectedId) ? { ...v, prestacao: resultado } : v)
     );
     setConfirmado(true);
+    setAvisoCalc(null);
   };
+
+  // Valor vindo da Calculadora: abre o vendedor e acrescenta o valor na forma escolhida
+  const [avisoCalc, setAvisoCalc] = useState(null);
+  const [calcAberta, setCalcAberta] = useState(false);
+  const lancarDaCalculadora = (l) => {
+    const jaTinha = (entregue[l.forma] || [""]).some((x) => parse(x) !== 0);
+    setEntregue((prev) => {
+      const lista = (prev[l.forma] || [""]).filter((x) => parse(x) !== 0);
+      return { ...prev, [l.forma]: [...lista, valorCampo(l.valor)] };
+    });
+    setConfirmado(false);
+    const f = formas.find((x) => x.key === l.forma);
+    setAvisoCalc({ valor: l.valor, forma: f ? `${f.icon} ${f.label}` : l.forma, jaTinha });
+    setCalcAberta(false);
+  };
+  useEffect(() => {
+    if (!lancamento) return;
+    const v = vendedores.find((x) => x.id === lancamento.vendedorId);
+    if (!v) { onLancamentoUsado && onLancamentoUsado(); return; }
+    const base = initValores(formas);
+    if (v.prestacao) {
+      formas.forEach((pt) => {
+        const val = v.prestacao.porForma?.[pt.key] || 0;
+        base[pt.key] = val > 0 ? [String(val)] : [""];
+      });
+    }
+    const lista = (base[lancamento.forma] || [""]).filter((x) => parse(x) !== 0);
+    base[lancamento.forma] = [...lista, valorCampo(lancamento.valor)];
+    setSelectedId(String(v.id));
+    setEntregue(base);
+    setConfirmado(false);
+    const f = formas.find((x) => x.key === lancamento.forma);
+    setAvisoCalc({ valor: lancamento.valor, forma: f ? `${f.icon} ${f.label}` : lancamento.forma, jaTinha: !!v.prestacao });
+    onLancamentoUsado && onLancamentoUsado();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lancamento]);
 
   // Carrega prestação já salva ao selecionar vendedor
   const aoSelecionarVendedor = (id) => {
+    setAvisoCalc(null);
     setSelectedId(id);
     setConfirmado(false);
     const v = vendedores.find((x) => x.id === Number(id));
@@ -972,6 +1053,16 @@ function PrestaContasTab({ vendedores, setVendedores, formas, cadastros, current
           );
         })()}
 
+        {vendedor && avisoCalc && !confirmado && (
+          <div style={{ background: "#172554", border: "2px solid #3B82F6", borderRadius: 12, padding: "12px 16px", marginBottom: 16, fontSize: 14, color: "#DBEAFE" }}>
+            🧮 Valor da calculadora <b>{fmt(avisoCalc.valor)}</b> lançado em <b>{avisoCalc.forma}</b>.
+            <div style={{ fontSize: 12, color: "#93C5FD", marginTop: 4 }}>
+              {avisoCalc.jaTinha ? "Este vendedor já tinha prestação: o valor foi somado aos que já estavam. " : ""}
+              Confira os valores abaixo e clique em <b>✔️ Confirmar Prestação de Contas</b> para salvar.
+            </div>
+          </div>
+        )}
+
         {/* Banner de prestação já confirmada */}
         {vendedor && confirmado && (
           <div style={{ background: "#0D1F0D", border: "1px solid #10B98155", borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 13, color: "#10B981", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -985,6 +1076,25 @@ function PrestaContasTab({ vendedores, setVendedores, formas, cadastros, current
               )}
             </div>
             <button style={{ ...btn, background: "#2563EB", fontSize: 11, padding: "5px 12px" }} onClick={() => setConfirmado(false)}>✏️ Editar</button>
+          </div>
+        )}
+
+        {vendedor && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+            <button style={{ ...btn, background: "#2563EB", fontSize: 13, padding: "9px 16px" }} onClick={() => setCalcAberta(true)}>🧮 Abrir calculadora</button>
+          </div>
+        )}
+
+        {vendedor && calcAberta && (
+          <div style={{ position: "fixed", inset: 0, background: "#000C", zIndex: 1000, overflowY: "auto", padding: "20px 12px" }}
+            onClick={(e) => { if (e.target === e.currentTarget) setCalcAberta(false); }}>
+            <div style={{ maxWidth: 820, margin: "0 auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div style={{ color: "#F1F5F9", fontWeight: 800 }}>🧮 Calculadora — {vendedor.nome}</div>
+                <button style={{ ...btn, background: "#374151", fontSize: 13, padding: "8px 14px" }} onClick={() => setCalcAberta(false)}>✕ Fechar</button>
+              </div>
+              <CalculadoraTab vendedores={[vendedor]} formas={formas} vendedorFixo={vendedor} onLancar={lancarDaCalculadora} />
+            </div>
           </div>
         )}
 
@@ -3309,6 +3419,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.id, currentUser?.admin, permUnidLoaded, unidCaixaLoaded, minhasUnidades.join(",")]);
   const [subConfig, setSubConfig] = useState("usuarios");
+  const [lancamentoCalc, setLancamentoCalc] = useState(null);
   const acessos = acessosDe(currentUser, permissoes);
   const pode = (k) => acessos.includes(k);
   const chaveAba = (a) => (a === "ver_fechamento" || a === "editar_fechamento") ? "historico" : a;
@@ -3543,7 +3654,8 @@ export default function App() {
         {pode(chaveAba(aba)) && <>
         {aba === "cadastros" && <CadastroVendedoresTab cadastros={cadastros} setCadastros={setCadastros} currentUser={currentUser} abrirRelatorio={(nome) => { setVendedorRelatorio(nome); setAba("relatorio"); }} />}
         {aba === "entrada" && <EntradaTab vendedores={vendedoresAtual} setVendedores={setVendedores} formas={formas} cadastros={cadastros} />}
-        {aba === "contas" && <PrestaContasTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} cadastros={cadastros} currentUser={currentUser} conferentesLista={conferentesLista} />}
+        {aba === "contas" && <PrestaContasTab vendedores={vendedores} setVendedores={setVendedores} formas={formas} cadastros={cadastros} currentUser={currentUser} conferentesLista={conferentesLista}
+          lancamento={lancamentoCalc} onLancamentoUsado={() => setLancamentoCalc(null)} />}
         {aba === "folha" && <FolhaModulo currentUser={currentUser} />}
         {aba === "relatorio" && (
           <RelatorioVendedores cadastros={cadastros} historico={historico} vendedorInicial={vendedorRelatorio}
@@ -3667,7 +3779,8 @@ export default function App() {
           />
         )}
         {aba === "mensagens" && <MensagensTab cadastros={cadastros} vendedores={vendedoresAtual} currentUser={currentUser} />}
-        {aba === "calculadora" && <CalculadoraTab />}
+        {aba === "calculadora" && <CalculadoraTab vendedores={vendedores} formas={formas}
+          onLancar={pode("contas") ? (l) => { setLancamentoCalc({ ...l, ts: Date.now() }); setAba("contas"); } : null} />}
         {aba === "configuracao" && (
           <ConfiguracaoTab sub={subConfig} setSub={setSubConfig}
             usuarios={<ConferentesTab currentUser={currentUser} onMudanca={recarregarConferentes} permissoes={permissoes} setPermissoes={setPermissoes}
