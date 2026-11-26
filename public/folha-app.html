@@ -3476,11 +3476,58 @@ function gerarReciboDecimo(id) {
   toast('Recibo gerado','success');
 }
 
+/* Escolher quem sai no PDF do 13º (tem funcionário que não recebe 13º).
+   A escolha fica salva por ano em state.decimoPdfFora = { "2026": [empId, ...] } */
+function empsDecimoAno(ano) {
+  return empsTodos().filter(e => state.decimo.some(d => d.employeeId === e.id && String(d.ano) === ano) || avosDecimo(e, ano) > 0);
+}
 function exportarDecimoPDF() {
+  const emps = empsDecimoAno(decimoAno);
+  if (!emps.length) { toast('Nenhum funcionário para ' + decimoAno, 'error'); return; }
+  const fora = new Set(((state.decimoPdfFora || {})[decimoAno]) || []);
+  const linhas = emps.map(e => {
+    const pago = state.decimo.filter(d => d.employeeId === e.id && String(d.ano) === decimoAno).reduce((s, d) => s + liquidoDecimo(d), 0);
+    return `<label class="flex items-center gap-3 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">
+      <input type="checkbox" class="decPdfChk w-4 h-4" value="${e.id}" ${fora.has(e.id) ? '' : 'checked'}>
+      <span class="flex-1"><b class="text-brand-800 dark:text-white">${escape(e.name)}</b>${e.inativo ? ' <span class="text-xs text-slate-400">(inativo)</span>' : ''}
+        <span class="block text-[11px] text-slate-500">${escape(e.cargo || '')}</span></span>
+      <span class="text-xs font-mono ${pago ? 'text-emerald-600' : 'text-slate-400'}">${pago ? fmtBRL(pago) : 'nada pago'}</span>
+    </label>`;
+  }).join('');
+  openModal({
+    title: `PDF do 13º · ${decimoAno} — quem entra?`,
+    body: `<p class="text-sm text-slate-600 dark:text-slate-300 mb-3">Desmarque quem <b>não recebe 13º</b>. A escolha fica salva para a próxima vez.</p>
+      <div class="flex gap-2 mb-3">
+        <button type="button" onclick="document.querySelectorAll('.decPdfChk').forEach(c=>c.checked=true);decPdfConta()" class="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-xs font-semibold">✅ Marcar todos</button>
+        <button type="button" onclick="document.querySelectorAll('.decPdfChk').forEach(c=>c.checked=false);decPdfConta()" class="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-xs font-semibold">⬜ Desmarcar todos</button>
+        <button type="button" onclick="document.querySelectorAll('.decPdfChk').forEach(c=>{c.checked = state.decimo.some(d => d.employeeId === c.value && String(d.ano) === decimoAno)});decPdfConta()" class="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-xs font-semibold">💰 Só quem tem pagamento</button>
+      </div>
+      <div class="flex flex-col gap-1.5 max-h-[50vh] overflow-y-auto">${linhas}</div>`,
+    footer: `<span id="decPdfQtd" class="text-sm text-slate-500 mr-auto"></span>
+      <button onclick="closeModal()" class="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 font-semibold">Cancelar</button>
+      <button onclick="gerarDecimoPDFSelecionados()" class="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold flex items-center gap-1"><i data-lucide="file-down" class="w-4 h-4"></i> Gerar PDF</button>`
+  });
+  document.querySelectorAll('.decPdfChk').forEach(c => c.addEventListener('change', decPdfConta));
+  decPdfConta();
+}
+function decPdfConta() {
+  const t = document.querySelectorAll('.decPdfChk').length, m = document.querySelectorAll('.decPdfChk:checked').length;
+  const el = document.getElementById('decPdfQtd'); if (el) el.textContent = `${m} de ${t} selecionado(s)`;
+}
+function gerarDecimoPDFSelecionados() {
+  const chks = Array.from(document.querySelectorAll('.decPdfChk'));
+  const sel = new Set(chks.filter(c => c.checked).map(c => c.value));
+  if (!sel.size) { toast('Marque pelo menos um funcionário', 'error'); return; }
+  state.decimoPdfFora = { ...(state.decimoPdfFora || {}), [decimoAno]: chks.filter(c => !c.checked).map(c => c.value) };
+  persist();
+  closeModal();
+  gerarDecimoPDF(sel);
+}
+function gerarDecimoPDF(selecionados) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape' });
   reciboHeader(doc, `13º SALÁRIO · ${decimoAno}`);
-  const emps = empsTodos().filter(e => state.decimo.some(d => d.employeeId === e.id && String(d.ano) === decimoAno) || avosDecimo(e, decimoAno) > 0);
+  const emps = empsDecimoAno(decimoAno).filter(e => !selecionados || selecionados.has(e.id));
   let t1 = 0, t2 = 0, tSal = 0, tPrev = 0;
   const cel = (d) => d ? `${fmtBRL(liquidoDecimo(d))} (${fmtDate(d.data)})` : '-';
   const body = emps.map(e => {
@@ -3914,6 +3961,8 @@ window.decimoForm = decimoForm;
 window.decimoExcluir = decimoExcluir;
 window.gerarReciboDecimo = gerarReciboDecimo;
 window.exportarDecimoPDF = exportarDecimoPDF;
+window.gerarDecimoPDFSelecionados = gerarDecimoPDFSelecionados;
+window.decPdfConta = decPdfConta;
 
 window.feriasForm = feriasForm;
 window.feriasExcluir = feriasExcluir;
