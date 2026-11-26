@@ -3,12 +3,13 @@
 //  - Registra o empréstimo, devoluções (totais ou parciais)
 //  - Filtros: Todos / Em comodato / Devolvidos / Não devolvidos (vencidos)
 //  - Termo de comodato para imprimir e lembrete por WhatsApp
-//  Dados na nuvem: "comodatos"
+//  - Vendas por comodatário (data, quantidade, valor) + relatório por período
+//  Dados na nuvem: "comodatos"  (cada comodato tem vendas: [{ id, data, quantidade, valorUnit, valor, obs, por }])
 // ══════════════════════════════════════════════════════════════
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import {
-  r2, hojeISO, dataBR, novoId, esc, normNome, abrirImpressao,
+  r2, fmt, hojeISO, dataBR, novoId, esc, normNome, abrirImpressao,
   card, cardTitle, labelStyle, inputStyle, btn, miniBtn, alertaErro, alertaOk,
 } from "./ui";
 
@@ -27,6 +28,15 @@ const STATUS = {
   vencido: { txt: "Não devolvido (vencido)", cor: "#EF4444", icone: "⏰" },
   devolvido: { txt: "Devolvido", cor: "#10B981", icone: "✅" },
 };
+const somaVendas = (vendas, de = "", ate = "") => {
+  const l = (vendas || []).filter((v) => (!de || v.data >= de) && (!ate || v.data <= ate));
+  return { qtd: r2(l.reduce((s, v) => s + (Number(v.quantidade) || 0), 0)), valor: r2(l.reduce((s, v) => s + (Number(v.valor) || 0), 0)), n: l.length, lista: l };
+};
+const numBR = (s) => {
+  const t = String(s ?? "").trim();
+  return r2(Number(t.includes(",") ? t.replace(/\./g, "").replace(",", ".") : t) || 0);
+};
+const inicioMes = () => hojeISO().slice(0, 8) + "01";
 const fmtQtd = (n) => Number(n || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 });
 const diasEntre = (a, b) => Math.round((new Date(b + "T12:00:00") - new Date(a + "T12:00:00")) / 864e5);
 const soDigitos = (s) => String(s || "").replace(/\D/g, "");
@@ -43,7 +53,8 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
 
   const [filtro, setFiltro] = useState("todos");
   const [busca, setBusca] = useState("");
-  const [modal, setModal] = useState(null); // { tipo: "form", id? } | { tipo: "devolucao", id }
+  const [modal, setModal] = useState(null); // { tipo: "form", id? } | { tipo: "devolucao", id } | { tipo: "venda", id }
+  const [visao, setVisao] = useState("lista"); // lista | vendas
   const [ok, setOk] = useState("");
   const avisar = (m) => { setOk(m); setTimeout(() => setOk(""), 3500); };
 
@@ -94,7 +105,22 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
     window.open(`https://wa.me/55${tel.replace(/^55(?=\d{10,11}$)/, "")}?text=${encodeURIComponent(msg)}`, "_blank");
   };
 
-  const imprimirTermo = (c) => {
+  const imprimirLista = (modo) => {
+    const linhas = lista.map((c) => {
+      const v = somaVendas(c.vendas);
+      return `<tr><td>${esc(String(c.numero || "").padStart(4, "0"))}</td><td><b>${esc(c.cliente)}</b><br><span class="sub">${esc(c.telefone || "")}</span></td>
+        <td>${fmtQtd(c.quantidade)} ${esc(c.unidade)} ${esc(c.produto)}</td><td>${dataBR(c.dataEmprestimo)}</td><td>${STATUS[c.status].txt}</td>
+        <td class="r">${v.n ? fmtQtd(v.qtd) : "—"}</td><td class="r">${v.n ? fmt(v.valor) : "—"}</td><td style="font-size:10px">${esc(c.obs || "")}</td></tr>`;
+    }).join("");
+    const filtroTxt = { todos: "Todos", ativo: "Em comodato", devolvido: "Devolvidos", vencido: "Não devolvidos" }[filtro];
+    abrirImpressao(`Comodatos - ${filtroTxt} - ${dataBR(hoje)}`, `
+      <h1>📦 Comodatos — ${esc(filtroTxt)}${busca ? " · busca: " + esc(busca) : ""}</h1>
+      <div class="sub">${esc(empresa?.nome || "")} · emitido em ${dataBR(hoje)} · ${lista.length} comodato(s)</div>
+      <table><thead><tr><th>Nº</th><th>Cliente</th><th>Produto</th><th>Emprestado</th><th>Situação</th><th class="r">Qtd vendida</th><th class="r">Valor vendido</th><th>Obs.</th></tr></thead>
+      <tbody>${linhas}</tbody></table>`, { modo });
+  };
+
+  const imprimirTermo = (c, modo) => {
     const emp = empresa || { nome: "", cnpj: "", endereco: "", cidade: "", telefone: "" };
     const devol = (c.devolucoes || []).length ? `
       <h3 style="font-size:13px;margin:16px 0 6px">Devoluções</h3>
@@ -122,7 +148,7 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
       </p>
       ${devol}
       <div style="text-align:right;font-size:13px;margin-top:18px">${esc(emp.cidade ? emp.cidade + ", " : "")}${new Date(c.dataEmprestimo + "T12:00:00").toLocaleDateString("pt-BR", { day: "numeric", month: "long", year: "numeric" })}.</div>
-      <div class="ass" style="margin-top:56px"><div>${esc(emp.nome || "COMODANTE")}<br>COMODANTE</div><div>${esc(c.cliente)}<br>COMODATÁRIO(A)</div></div>`);
+      <div class="ass" style="margin-top:56px"><div>${esc(emp.nome || "COMODANTE")}<br>COMODANTE</div><div>${esc(c.cliente)}<br>COMODATÁRIO(A)</div></div>`, { modo });
   };
 
   const chip = (k, txt) => (
@@ -141,8 +167,16 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
           <div style={{ fontSize: 22, fontWeight: 900, color: "#F1F5F9" }}>📦 Comodato</div>
           <div style={{ fontSize: 12, color: "#94A3B8" }}>{contagem.ativo} empréstimo(s) ativo(s){contagem.vencido > 0 && <span style={{ color: "#FCA5A5" }}> · {contagem.vencido} vencido(s)</span>}</div>
         </div>
-        <button style={{ ...btn, background: "#4F46E5", fontSize: 14 }} onClick={() => setModal({ tipo: "form" })}>➕ Novo Empréstimo</button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button style={{ ...btn, background: visao === "vendas" ? "#D97706" : "#1E293B", border: "1px solid #D9770688", fontSize: 14 }} onClick={() => setVisao(visao === "vendas" ? "lista" : "vendas")}>
+            {visao === "vendas" ? "📦 Voltar aos comodatos" : "📊 Relatório de Vendas"}
+          </button>
+          <button style={{ ...btn, background: "#4F46E5", fontSize: 14 }} onClick={() => setModal({ tipo: "form" })}>➕ Novo Empréstimo</button>
+        </div>
       </div>
+
+      {visao === "vendas" && <RelatorioVendasComodato comodatos={comodatos} empresa={empresa} />}
+      {visao === "lista" && <>
 
       {ok && <div style={alertaOk}>{ok}</div>}
       {contagem.vencido > 0 && filtro !== "vencido" && (
@@ -172,6 +206,10 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
         {chip("devolvido", "Devolvidos")}
         {chip("vencido", "Não Devolvidos")}
         <input style={{ ...inputStyle, width: 240, padding: "8px 12px", marginLeft: "auto" }} placeholder="🔍 Buscar cliente, produto, telefone" value={busca} onChange={(e) => setBusca(e.target.value)} />
+        {lista.length > 0 && <>
+          <button style={{ ...miniBtn, background: "#DC2626", padding: "8px 12px" }} onClick={() => imprimirLista("pdf")} title="Baixar a lista em PDF">📄 PDF</button>
+          <button style={{ ...miniBtn, background: "#374151", padding: "8px 12px" }} onClick={() => imprimirLista()} title="Imprimir a lista">🖨️</button>
+        </>}
       </div>
 
       {/* LISTA */}
@@ -206,11 +244,21 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
                         {c.criadoPor && <> · por {c.criadoPor}</>}
                       </div>
                       {c.obs && <div style={{ fontSize: 11, color: "#64748B", marginTop: 3 }}>📝 {c.obs}</div>}
+                      {(() => {
+                        const v = somaVendas(c.vendas); const m = somaVendas(c.vendas, inicioMes(), hoje);
+                        if (!v.n) return null;
+                        return (
+                          <div style={{ fontSize: 12, color: "#FCD34D", marginTop: 5, fontWeight: 700 }}>
+                            💰 Vendido: {fmtQtd(v.qtd)} un · {fmt(v.valor)} <span style={{ color: "#94A3B8", fontWeight: 400 }}>({v.n} lançamento(s) · este mês: {fmtQtd(m.qtd)} un · {fmt(m.valor)})</span>
+                          </div>
+                        );
+                      })()}
                     </div>
                     <div style={{ display: "flex", gap: 6, alignItems: "flex-start", flexWrap: "wrap" }}>
+                      <button style={{ ...miniBtn, background: "#D97706", padding: "6px 10px" }} onClick={() => setModal({ tipo: "venda", id: c.id })} title="Lançar venda deste cliente">💰 Venda</button>
                       {c.status !== "devolvido" && <button style={{ ...miniBtn, background: "#059669", padding: "6px 10px" }} onClick={() => setModal({ tipo: "devolucao", id: c.id })}>↩️ Devolução</button>}
                       {c.status !== "devolvido" && <button style={{ ...miniBtn, background: "#16A34A" }} onClick={() => whatsapp(c)} title="Lembrete por WhatsApp">💬</button>}
-                      <button style={{ ...miniBtn, background: "#DC2626" }} onClick={() => imprimirTermo(c)} title="Termo de comodato">🖨️</button>
+                      <button style={{ ...miniBtn, background: "#DC2626" }} onClick={() => imprimirTermo(c)} title="Termo de comodato (imprimir ou baixar PDF)">🖨️</button>
                       <button style={{ ...miniBtn, background: "#2563EB" }} onClick={() => setModal({ tipo: "form", id: c.id })} title="Editar">✏️</button>
                       {admin && <button style={{ ...miniBtn, background: "#7F1D1D" }} onClick={() => excluir(c)} title="Excluir">🗑️</button>}
                     </div>
@@ -221,10 +269,15 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
           </div>
         )}
       </div>
+      </>}
 
       {modal?.tipo === "form" && (
         <FormComodato comodatos={comodatos} setComodatos={setComodatos} id={modal.id} currentUser={currentUser}
           onFechar={() => setModal(null)} onSalvo={(m, novo) => { setModal(null); avisar(m); if (novo && confirm("Imprimir o termo de comodato agora?")) imprimirTermo(novo); }} />
+      )}
+      {modal?.tipo === "venda" && (
+        <FormVenda comodato={comodatos.find((x) => x.id === modal.id)} comodatos={comodatos} setComodatos={setComodatos} currentUser={currentUser}
+          onFechar={() => setModal(null)} onSalvo={(m) => { setModal(null); avisar(m); }} />
       )}
       {modal?.tipo === "devolucao" && (
         <FormDevolucao comodato={comodatos.find((x) => x.id === modal.id)} setComodatos={setComodatos} currentUser={currentUser}
@@ -374,5 +427,235 @@ function FormDevolucao({ comodato, setComodatos, currentUser, onFechar, onSalvo 
         <button style={{ ...btn, background: "#059669", flex: 2 }} onClick={salvar}>↩️ Confirmar devolução</button>
       </div>
     </Modal>
+  );
+}
+
+/* ══════ LANÇAR VENDA ══════ */
+function FormVenda({ comodato, comodatos, setComodatos, currentUser, onFechar, onSalvo }) {
+  // último valor unitário usado para este produto (para já vir preenchido)
+  const ultimoUnit = useMemo(() => {
+    if (!comodato) return 0;
+    const p = normNome(comodato.produto);
+    const todas = comodatos.filter((c) => normNome(c.produto) === p).flatMap((c) => c.vendas || []).filter((v) => Number(v.valorUnit) > 0);
+    todas.sort((a, b) => (a.criadoEm || "").localeCompare(b.criadoEm || ""));
+    return todas.length ? Number(todas[todas.length - 1].valorUnit) : 0;
+  }, [comodato, comodatos]);
+  const [data, setData] = useState(hojeISO());
+  const [qtd, setQtd] = useState("");
+  const [unit, setUnit] = useState(ultimoUnit ? ultimoUnit.toFixed(2).replace(".", ",") : "");
+  const [total, setTotal] = useState("");
+  const [totalManual, setTotalManual] = useState(false);
+  const [obs, setObs] = useState("");
+  const [erro, setErro] = useState("");
+  if (!comodato) return null;
+
+  const totalCalc = r2(numBR(qtd) * numBR(unit));
+  const totalFinal = totalManual ? numBR(total) : totalCalc;
+  const vendas = [...(comodato.vendas || [])].sort((a, b) => (b.data || "").localeCompare(a.data || ""));
+  const tot = somaVendas(comodato.vendas);
+
+  const salvar = () => {
+    setErro("");
+    const q = numBR(qtd);
+    if (!data) return setErro("Informe a data da venda.");
+    if (q <= 0) return setErro("Informe a quantidade vendida.");
+    if (totalFinal < 0) return setErro("Valor inválido.");
+    const venda = { id: novoId(), data, quantidade: q, valorUnit: numBR(unit), valor: totalFinal, obs: obs.trim(), por: currentUser?.nome || "", criadoEm: new Date().toISOString() };
+    setComodatos((prev) => prev.map((c) => (c.id === comodato.id ? { ...c, vendas: [...(c.vendas || []), venda] } : c)));
+    onSalvo(`💰 Venda lançada: ${fmtQtd(q)} un · ${fmt(totalFinal)} para ${comodato.cliente}`);
+  };
+  const excluirVenda = (v) => {
+    if (!confirm(`Excluir a venda de ${dataBR(v.data)} (${fmtQtd(v.quantidade)} un · ${fmt(v.valor)})?`)) return;
+    setComodatos((prev) => prev.map((c) => (c.id === comodato.id ? { ...c, vendas: (c.vendas || []).filter((x) => x.id !== v.id) } : c)));
+  };
+
+  return (
+    <Modal titulo="💰 Lançar venda" onFechar={onFechar}>
+      <div style={{ fontSize: 13, color: "#CBD5E1", marginBottom: 12 }}>
+        <b>{comodato.cliente}</b> · {comodato.produto}
+        {tot.n > 0 && <div style={{ color: "#FCD34D", fontSize: 12, marginTop: 3 }}>Total já vendido: {fmtQtd(tot.qtd)} un · {fmt(tot.valor)} ({tot.n} lançamento(s))</div>}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div><label style={labelStyle}>Data da venda</label><input style={inputStyle} type="date" value={data} onChange={(e) => setData(e.target.value)} /></div>
+        <div><label style={labelStyle}>Quantidade vendida *</label><input style={inputStyle} inputMode="decimal" placeholder="Ex: 10" value={qtd} onChange={(e) => setQtd(e.target.value)} autoFocus /></div>
+        <div><label style={labelStyle}>Valor unitário (R$)</label><input style={inputStyle} inputMode="decimal" placeholder="0,00" value={unit} onChange={(e) => { setUnit(e.target.value); setTotalManual(false); }} /></div>
+        <div>
+          <label style={labelStyle}>Valor total (R$)</label>
+          <input style={{ ...inputStyle, fontWeight: 800, color: "#FCD34D" }} inputMode="decimal" placeholder="0,00"
+            value={totalManual ? total : (totalCalc ? totalCalc.toFixed(2).replace(".", ",") : "")}
+            onChange={(e) => { setTotal(e.target.value); setTotalManual(true); }} />
+          <div style={{ fontSize: 10, color: "#64748B", marginTop: 3 }}>{totalManual ? "Digitado à mão" : "Quantidade × valor unitário"}</div>
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}><label style={labelStyle}>Observação</label><input style={inputStyle} placeholder="Opcional" value={obs} onChange={(e) => setObs(e.target.value)} /></div>
+      </div>
+      {erro && <div style={{ ...alertaErro, marginTop: 12 }}>⚠️ {erro}</div>}
+      <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+        <button style={{ ...btn, background: "#374151", flex: 1 }} onClick={onFechar}>Cancelar</button>
+        <button style={{ ...btn, background: "#D97706", flex: 2 }} onClick={salvar}>💰 Lançar venda {totalFinal > 0 ? fmt(totalFinal) : ""}</button>
+      </div>
+      {vendas.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{ ...labelStyle, marginBottom: 8 }}>Vendas lançadas</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto" }}>
+            {vendas.map((v) => (
+              <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "#1E293B", borderRadius: 8, padding: "6px 10px", fontSize: 12, color: "#CBD5E1" }}>
+                <span style={{ minWidth: 78 }}>{dataBR(v.data)}</span>
+                <span style={{ flex: 1 }}><b>{fmtQtd(v.quantidade)} un</b>{v.valorUnit ? ` × ${fmt(v.valorUnit)}` : ""}{v.obs ? <span style={{ color: "#64748B" }}> · {v.obs}</span> : null}</span>
+                <b style={{ color: "#FCD34D" }}>{fmt(v.valor)}</b>
+                <button style={{ ...miniBtn, background: "#7F1D1D", padding: "3px 8px" }} onClick={() => excluirVenda(v)} title="Excluir venda">🗑️</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* ══════ RELATÓRIO DE VENDAS POR PERÍODO ══════ */
+function RelatorioVendasComodato({ comodatos, empresa }) {
+  const [de, setDe] = useState(inicioMes());
+  const [ate, setAte] = useState(hojeISO());
+  const [produto, setProduto] = useState("");
+  const [busca, setBusca] = useState("");
+  const [incluirZerados, setIncluirZerados] = useState(false);
+  const [detalhado, setDetalhado] = useState(false);
+
+  const produtos = useMemo(() => [...new Set(comodatos.map((c) => c.produto).filter(Boolean))].sort(), [comodatos]);
+
+  const linhas = useMemo(() => {
+    const m = new Map();
+    const b = normNome(busca);
+    comodatos
+      .filter((c) => !produto || c.produto === produto)
+      .filter((c) => !b || [c.cliente, c.telefone, c.obs].some((x) => normNome(x).includes(b)))
+      .forEach((c) => {
+        const k = normNome(c.cliente);
+        const sv = somaVendas(c.vendas, de, ate);
+        const e = m.get(k) || { cliente: c.cliente, telefone: c.telefone || "", produtos: new Set(), qtd: 0, valor: 0, n: 0, vendas: [] };
+        e.produtos.add(c.produto);
+        if (!e.telefone && c.telefone) e.telefone = c.telefone;
+        e.qtd = r2(e.qtd + sv.qtd); e.valor = r2(e.valor + sv.valor); e.n += sv.n;
+        e.vendas.push(...sv.lista.map((v) => ({ ...v, produto: c.produto })));
+        m.set(k, e);
+      });
+    return [...m.values()]
+      .filter((e) => incluirZerados || e.n > 0)
+      .map((e) => ({ ...e, produtos: [...e.produtos].join(", "), vendas: e.vendas.sort((a, b2) => (a.data || "").localeCompare(b2.data || "")) }))
+      .sort((a, b2) => b2.qtd - a.qtd || a.cliente.localeCompare(b2.cliente));
+  }, [comodatos, de, ate, produto, busca, incluirZerados]);
+
+  const tot = linhas.reduce((t, e) => ({ qtd: r2(t.qtd + e.qtd), valor: r2(t.valor + e.valor), n: t.n + e.n, clientes: t.clientes + (e.n > 0 ? 1 : 0) }), { qtd: 0, valor: 0, n: 0, clientes: 0 });
+
+  const imprimir = (modo) => {
+    const corpo = linhas.map((e, i) => {
+      let h = `<tr><td>${i + 1}</td><td><b>${esc(e.cliente)}</b>${e.telefone ? `<br><span class="sub">${esc(e.telefone)}</span>` : ""}</td><td>${esc(e.produtos)}</td>
+        <td class="ctr">${e.n}</td><td class="r"><b>${fmtQtd(e.qtd)}</b></td><td class="r"><b>${fmt(e.valor)}</b></td></tr>`;
+      if (detalhado && e.vendas.length) h += e.vendas.map((v) => `<tr style="color:#555;font-size:10px"><td></td><td colspan="2">↳ ${dataBR(v.data)}${v.obs ? " · " + esc(v.obs) : ""}</td><td></td>
+        <td class="r">${fmtQtd(v.quantidade)}${v.valorUnit ? " × " + fmt(v.valorUnit) : ""}</td><td class="r">${fmt(v.valor)}</td></tr>`).join("");
+      return h;
+    }).join("");
+    abrirImpressao(`Vendas Comodato ${dataBR(de)} a ${dataBR(ate)}${produto ? " - " + produto : ""}`, `
+      <h1>💰 Relatório de Vendas — Comodatários</h1>
+      <div class="sub">${esc(empresa?.nome || "")} · Período: <b>${dataBR(de)} a ${dataBR(ate)}</b>${produto ? " · Produto: <b>" + esc(produto) + "</b>" : ""} · emitido em ${dataBR(hojeISO())}</div>
+      <div class="cards">
+        <div class="c"><div class="l">Quantidade vendida</div><div class="v">${fmtQtd(tot.qtd)}</div></div>
+        <div class="c"><div class="l">Valor vendido</div><div class="v">${fmt(tot.valor)}</div></div>
+        <div class="c"><div class="l">Clientes que venderam</div><div class="v">${tot.clientes}</div></div>
+        <div class="c"><div class="l">Lançamentos</div><div class="v">${tot.n}</div></div>
+      </div>
+      <table><thead><tr><th>#</th><th>Cliente</th><th>Produto</th><th class="ctr">Lanç.</th><th class="r">Qtd vendida</th><th class="r">Valor</th></tr></thead>
+      <tbody>${corpo}</tbody>
+      <tfoot><tr><td></td><td colspan="2">TOTAL (${linhas.length} cliente(s))</td><td class="ctr">${tot.n}</td><td class="r">${fmtQtd(tot.qtd)}</td><td class="r">${fmt(tot.valor)}</td></tr></tfoot></table>`, { modo });
+  };
+
+  const atalho = (txt, d1, d2) => (
+    <button style={{ ...miniBtn, background: de === d1 && ate === d2 ? "#D97706" : "#1E293B", border: "1px solid #334155", padding: "6px 10px" }} onClick={() => { setDe(d1); setAte(d2); }}>{txt}</button>
+  );
+  const h = hojeISO();
+  const mesPassado = (() => { const d = new Date(h.slice(0, 8) + "01T12:00:00"); d.setMonth(d.getMonth() - 1); const ini = d.toISOString().slice(0, 10); const fim = new Date(new Date(h.slice(0, 8) + "01T12:00:00") - 864e5).toISOString().slice(0, 10); return [ini, fim]; })();
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={card}>
+        <h2 style={cardTitle}>📊 Relatório de Vendas por Período</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 10 }}>
+          <div><label style={labelStyle}>De</label><input style={inputStyle} type="date" value={de} onChange={(e) => setDe(e.target.value)} /></div>
+          <div><label style={labelStyle}>Até</label><input style={inputStyle} type="date" value={ate} onChange={(e) => setAte(e.target.value)} /></div>
+          <div>
+            <label style={labelStyle}>Produto</label>
+            <select style={inputStyle} value={produto} onChange={(e) => setProduto(e.target.value)}>
+              <option value="">Todos os produtos</option>
+              {produtos.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+          <div><label style={labelStyle}>Cliente</label><input style={inputStyle} placeholder="🔍 Buscar" value={busca} onChange={(e) => setBusca(e.target.value)} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
+          {atalho("Hoje", h, h)}
+          {atalho("Este mês", inicioMes(), h)}
+          {atalho("Mês passado", mesPassado[0], mesPassado[1])}
+          {atalho("Este ano", h.slice(0, 4) + "-01-01", h)}
+          <label style={{ fontSize: 12, color: "#CBD5E1", display: "flex", gap: 6, alignItems: "center", marginLeft: 8, cursor: "pointer" }}>
+            <input type="checkbox" checked={incluirZerados} onChange={(e) => setIncluirZerados(e.target.checked)} /> Mostrar quem não vendeu
+          </label>
+          <label style={{ fontSize: 12, color: "#CBD5E1", display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+            <input type="checkbox" checked={detalhado} onChange={(e) => setDetalhado(e.target.checked)} /> Detalhar cada venda
+          </label>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <button style={{ ...btn, background: "#DC2626", padding: "8px 14px" }} onClick={() => imprimir("pdf")} disabled={!linhas.length}>📄 Salvar PDF</button>
+            <button style={{ ...btn, background: "#374151", padding: "8px 14px" }} onClick={() => imprimir()} disabled={!linhas.length}>🖨️ Imprimir</button>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 }}>
+        {[["Quantidade vendida", fmtQtd(tot.qtd), "#FCD34D"], ["Valor vendido", fmt(tot.valor), "#10B981"], ["Clientes que venderam", tot.clientes, "#A5B4FC"], ["Lançamentos", tot.n, "#94A3B8"]].map(([l, v, cor]) => (
+          <div key={l} style={{ background: "#0F172A", border: "1px solid #1E293B", borderRadius: 12, padding: 12 }}>
+            <div style={{ fontSize: 10, color: "#94A3B8", textTransform: "uppercase" }}>{l}</div>
+            <div style={{ fontSize: 22, fontWeight: 900, color: cor }}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={card}>
+        {linhas.length === 0 ? (
+          <div style={{ textAlign: "center", color: "#64748B", padding: 24 }}>Nenhuma venda lançada neste período. Use o botão <b style={{ color: "#FCD34D" }}>💰 Venda</b> em cada comodatário.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 560 }}>
+              <thead><tr style={{ color: "#94A3B8", fontSize: 11, textTransform: "uppercase", textAlign: "left" }}>
+                <th style={{ padding: 8 }}>Cliente</th><th style={{ padding: 8 }}>Produto</th><th style={{ padding: 8, textAlign: "center" }}>Lanç.</th>
+                <th style={{ padding: 8, textAlign: "right" }}>Qtd vendida</th><th style={{ padding: 8, textAlign: "right" }}>Valor</th>
+              </tr></thead>
+              <tbody>
+                {linhas.map((e) => (
+                  <Fragment key={e.cliente}>
+                    <tr style={{ borderTop: "1px solid #1E293B", color: e.n ? "#F1F5F9" : "#64748B" }}>
+                      <td style={{ padding: 8 }}><b>{e.cliente}</b>{e.telefone && <div style={{ fontSize: 11, color: "#94A3B8" }}>{e.telefone}</div>}</td>
+                      <td style={{ padding: 8, fontSize: 12 }}>{e.produtos}</td>
+                      <td style={{ padding: 8, textAlign: "center" }}>{e.n}</td>
+                      <td style={{ padding: 8, textAlign: "right", fontWeight: 800, color: e.n ? "#FCD34D" : undefined }}>{fmtQtd(e.qtd)}</td>
+                      <td style={{ padding: 8, textAlign: "right", fontWeight: 800, color: e.n ? "#10B981" : undefined }}>{fmt(e.valor)}</td>
+                    </tr>
+                    {detalhado && e.vendas.map((v) => (
+                      <tr key={v.id} style={{ color: "#94A3B8", fontSize: 11 }}>
+                        <td style={{ padding: "2px 8px 2px 20px" }} colSpan={2}>↳ {dataBR(v.data)}{v.obs ? ` · ${v.obs}` : ""}</td><td></td>
+                        <td style={{ padding: "2px 8px", textAlign: "right" }}>{fmtQtd(v.quantidade)}{v.valorUnit ? ` × ${fmt(v.valorUnit)}` : ""}</td>
+                        <td style={{ padding: "2px 8px", textAlign: "right" }}>{fmt(v.valor)}</td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                ))}
+              </tbody>
+              <tfoot><tr style={{ borderTop: "2px solid #334155", fontWeight: 900, color: "#F1F5F9" }}>
+                <td style={{ padding: 8 }} colSpan={2}>TOTAL ({linhas.length} cliente(s))</td><td style={{ padding: 8, textAlign: "center" }}>{tot.n}</td>
+                <td style={{ padding: 8, textAlign: "right", color: "#FCD34D" }}>{fmtQtd(tot.qtd)}</td><td style={{ padding: 8, textAlign: "right", color: "#10B981" }}>{fmt(tot.valor)}</td>
+              </tr></tfoot>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

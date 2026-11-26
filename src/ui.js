@@ -24,7 +24,10 @@ export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&a
 export const normNome = (s) => String(s || "").trim().toLowerCase();
 
 /* Abre uma janela para imprimir/salvar PDF */
-export function abrirImpressao(titulo, corpoHtml) {
+// opcoes.modo = "pdf" → em vez de abrir a impressão, baixa o PDF direto
+export function abrirImpressao(titulo, corpoHtml, opcoes = {}) {
+  const modoPdf = opcoes.modo === "pdf";
+  const nomePdf = String(titulo || "relatorio").replace(/[\\/:*?"<>|]+/g, "-").trim() + ".pdf";
   const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(titulo)}</title>
   <style>
     @page { size: A4; margin: 12mm; }
@@ -45,9 +48,41 @@ export function abrirImpressao(titulo, corpoHtml) {
     tfoot td { font-weight: 800; border-top: 2px solid #9ca3af; }
     .ass { display: flex; justify-content: space-around; margin-top: 40px; }
     .ass div { width: 200px; border-top: 1px solid #333; text-align: center; padding-top: 4px; font-size: 10px; color: #555; }
-    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
-  </style></head><body>${corpoHtml}
-  <script>window.onload = () => { window.print(); };<\/script></body></html>`;
+    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .barra-pdf { display: none !important; } }
+    .barra-pdf { position: sticky; top: 0; z-index: 10; display: flex; gap: 8px; justify-content: center; align-items: center; background: #0f172a; padding: 8px; margin: -12mm -12mm 12px; }
+    .barra-pdf button { border: none; border-radius: 6px; padding: 8px 16px; font-weight: 700; font-size: 13px; cursor: pointer; color: #fff; }
+    .barra-pdf span { color: #cbd5e1; font-size: 12px; }
+    @media screen { body { padding: 12mm; } }
+  </style></head><body>
+  <div class="barra-pdf">
+    <button style="background:#dc2626" onclick="baixarPdf()">📄 Baixar PDF</button>
+    <button style="background:#2563eb" onclick="window.print()">🖨️ Imprimir</button>
+    <span id="msg-pdf"></span>
+  </div>
+  <div id="conteudo">${corpoHtml}</div>
+  <script>
+    var NOME_PDF = ${JSON.stringify(nomePdf)};
+    function baixarPdf() {
+      var msg = document.getElementById("msg-pdf");
+      function gerar() {
+        msg.textContent = "Gerando PDF...";
+        window.html2pdf().set({ margin: 10, filename: NOME_PDF, image: { type: "jpeg", quality: 0.95 },
+          html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+          pagebreak: { mode: ["css", "legacy"], avoid: "tr" } })
+          .from(document.getElementById("conteudo")).save()
+          .then(function () { msg.textContent = "✅ PDF salvo na pasta Downloads"; })
+          .catch(function () { msg.textContent = "Não deu para gerar o PDF. Use Imprimir → Salvar como PDF."; });
+      }
+      if (window.html2pdf) return gerar();
+      msg.textContent = "Carregando...";
+      var sc = document.createElement("script");
+      sc.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
+      sc.onload = gerar;
+      sc.onerror = function () { msg.textContent = "Sem internet para gerar o PDF. Use Imprimir → Salvar como PDF."; };
+      document.head.appendChild(sc);
+    }
+    window.onload = function () { ${modoPdf ? "baixarPdf();" : "window.print();"} };
+  <\/script></body></html>`;
   const w = window.open("", "_blank");
   if (!w) { alert("O navegador bloqueou a janela de impressão. Libere as janelas pop-up para este site e tente de novo."); return; }
   w.document.open(); w.document.write(html); w.document.close();
