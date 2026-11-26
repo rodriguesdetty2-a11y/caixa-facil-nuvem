@@ -3661,7 +3661,7 @@ export default function App() {
           <RelatorioVendedores cadastros={cadastros} historico={historico} vendedorInicial={vendedorRelatorio}
             onAbrirDia={(id) => { const f = historico.find((x) => x.id === id); if (f) { setFechamentoVer(f); setAba("ver_fechamento"); } }} />
         )}
-        {aba === "comodato" && <ComodatoTab comodatos={comodatos} setComodatos={setComodatos} empresas={empresas} currentUser={currentUser} />}
+        {aba === "comodato" && <ComodatoTab comodatos={comodatos} setComodatos={setComodatos} empresas={empresas} currentUser={currentUser} cadastros={cadastros} />}
         {aba === "abastecimento" && (
           <AbastecimentoTab motos={motos} setMotos={setMotos} abastecimentos={abastecimentos} setAbastecimentos={setAbastecimentos}
             config={abastConfig} setConfig={setAbastConfig} cadastros={cadastros} currentUser={currentUser} />

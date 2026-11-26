@@ -14,7 +14,7 @@ import {
 } from "./ui";
 
 const PRODUTOS_SUGERIDOS = ["BOTIJÃO P13", "BOTIJÃO P20", "BOTIJÃO P45", "GALÃO DE ÁGUA 20L", "REGULADOR", "MANGUEIRA", "CARRINHO"];
-const FORM_VAZIO = { produto: "", quantidade: "1", unidade: "un", cliente: "", telefone: "", documento: "", endereco: "", dataEmprestimo: hojeISO(), previsao: "", obs: "" };
+const FORM_VAZIO = { produto: "", quantidade: "1", unidade: "un", vendedor: "", cliente: "", telefone: "", documento: "", endereco: "", dataEmprestimo: hojeISO(), previsao: "", obs: "" };
 
 const qtdDevolvida = (c) => r2((c.devolucoes || []).reduce((s, d) => s + (Number(d.quantidade) || 0), 0));
 const qtdPendente = (c) => r2((Number(c.quantidade) || 0) - qtdDevolvida(c));
@@ -49,13 +49,28 @@ const formatTel = (s) => {
   return d.replace(/(\d{2})(\d)/, "($1) $2").replace(/(\d{5})(\d)/, "$1-$2");
 };
 
-export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [], currentUser }) {
+// tenta achar o vendedor escrito nas observações (ex.: "RESPONSAVEL: BISMARK")
+function vendedorNasObs(obs) {
+  const m = String(obs || "").toUpperCase().match(/(?:VENDEDOR\s+RESPONS[AÁ]VEL|RESPONS[AÁ]VEL|RESPOSSAVEL|VENDEDOR)\s*[:\-]?\s*([A-ZÀ-Ú]{3,}(?:\s+[A-ZÀ-Ú]{3,})?)/);
+  if (!m) return "";
+  return m[1].replace(/\s+(COD|CODIGO|CÓDIGO|MODEL|PN|SN)$/, "").trim();
+}
+const ordemAlfa = (a, b) => String(a.cliente || "").localeCompare(String(b.cliente || ""), "pt-BR", { sensitivity: "base" });
+
+export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [], currentUser, cadastros = [] }) {
   const admin = !!currentUser?.admin;
   const empresa = empresas.find((e) => e.padrao) || empresas[0] || null;
   const hoje = hojeISO();
 
   const [filtro, setFiltro] = useState("todos");
   const [busca, setBusca] = useState("");
+  const [filtroVend, setFiltroVend] = useState(""); // "" = todos · "__sem__" = sem vendedor
+  const nomesVendedores = useMemo(() => [...new Set([
+    ...cadastros.map((c) => c?.nome),
+    ...comodatos.map((c) => c.vendedor),
+    ...comodatos.flatMap((c) => (c.vendas || []).map((v) => v.baixa?.vendedor)),
+  ].filter(Boolean).map((n) => String(n).trim().toUpperCase()))].sort((a, b) => a.localeCompare(b, "pt-BR")), [cadastros, comodatos]);
+  const vendedoresUsados = useMemo(() => [...new Set(comodatos.map((c) => c.vendedor).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR")), [comodatos]);
   const [modal, setModal] = useState(null); // { tipo: "form", id? } | { tipo: "devolucao", id } | { tipo: "venda", id }
   const [visao, setVisao] = useState("lista"); // lista | vendas
   const [ok, setOk] = useState("");
@@ -75,13 +90,14 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
     const b = normNome(busca);
     return comStatus
       .filter((c) => filtro === "todos" || (filtro === "entregar" ? c.aEntregar > 0 : filtro === "ativo" ? c.status !== "devolvido" : c.status === filtro))
-      .filter((c) => !b || [c.cliente, c.produto, c.telefone, c.obs, c.documento].some((x) => normNome(x).includes(b)))
+      .filter((c) => !b || [c.cliente, c.produto, c.telefone, c.obs, c.documento, c.vendedor, c.endereco].some((x) => normNome(x).includes(b)))
+      .filter((c) => !filtroVend || (filtroVend === "__sem__" ? !c.vendedor : c.vendedor === filtroVend))
       .sort((a, b2) => {
         const ordem = { vencido: 0, ativo: 1, devolvido: 2 };
         if (ordem[a.status] !== ordem[b2.status]) return ordem[a.status] - ordem[b2.status];
         return (b2.dataEmprestimo || "").localeCompare(a.dataEmprestimo || "");
       });
-  }, [comStatus, filtro, busca]);
+  }, [comStatus, filtro, busca, filtroVend]);
 
   // Quanto de cada produto está emprestado agora
   const emprestadoPorProduto = useMemo(() => {
@@ -111,17 +127,18 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
   };
 
   const imprimirLista = (modo) => {
-    const linhas = lista.map((c) => {
+    const linhas = [...lista].sort(ordemAlfa).map((c) => {
       const v = somaVendas(c.vendas);
       return `<tr><td>${esc(String(c.numero || "").padStart(4, "0"))}</td><td><b>${esc(c.cliente)}</b>${c.telefone ? `<br><span class="sub">📱 ${esc(c.telefone)}</span>` : ""}${c.endereco ? `<br><span class="sub">📍 ${esc(c.endereco)}</span>` : ""}</td>
-        <td>${fmtQtd(c.quantidade)} ${esc(c.unidade)} ${esc(c.produto)}</td><td>${dataBR(c.dataEmprestimo)}</td><td>${STATUS[c.status].txt}</td>
+        <td>${fmtQtd(c.quantidade)} ${esc(c.unidade)} ${esc(c.produto)}</td><td>${esc(c.vendedor || "—")}</td><td>${dataBR(c.dataEmprestimo)}</td><td>${STATUS[c.status].txt}</td>
         <td class="r">${v.n ? fmtQtd(v.qtd) : "—"}</td><td class="r">${v.n ? fmt(v.valor) : "—"}</td><td class="r">${c.aEntregar > 0 ? "<b>" + fmtQtd(c.aEntregar) + "</b>" : "—"}</td><td style="font-size:10px">${esc(c.obs || "")}</td></tr>`;
     }).join("");
     const filtroTxt = { todos: "Todos", ativo: "Em comodato", devolvido: "Devolvidos", vencido: "Não devolvidos", entregar: "Gás a entregar" }[filtro];
-    abrirImpressao(`Comodatos - ${filtroTxt} - ${dataBR(hoje)}`, `
-      <h1>📦 Comodatos — ${esc(filtroTxt)}${busca ? " · busca: " + esc(busca) : ""}</h1>
+    const vendTxt = filtroVend ? (filtroVend === "__sem__" ? "Sem vendedor" : filtroVend) : "";
+    abrirImpressao(`Comodatos - ${filtroTxt}${vendTxt ? " - " + vendTxt : ""} - ${dataBR(hoje)}`, `
+      <h1>📦 Comodatos — ${esc(filtroTxt)}${vendTxt ? " · Vendedor: " + esc(vendTxt) : ""}${busca ? " · busca: " + esc(busca) : ""}</h1>
       <div class="sub">${esc(empresa?.nome || "")} · emitido em ${dataBR(hoje)} · ${lista.length} comodato(s)</div>
-      <table><thead><tr><th>Nº</th><th>Cliente</th><th>Produto</th><th>Emprestado</th><th>Situação</th><th class="r">Qtd vendida</th><th class="r">Valor vendido</th><th class="r">A entregar</th><th>Obs.</th></tr></thead>
+      <table><thead><tr><th>Nº</th><th>Cliente</th><th>Produto</th><th>Vendedor</th><th>Emprestado</th><th>Situação</th><th class="r">Qtd vendida</th><th class="r">Valor vendido</th><th class="r">A entregar</th><th>Obs.</th></tr></thead>
       <tbody>${linhas}</tbody></table>`, { modo });
   };
 
@@ -180,7 +197,7 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
         </div>
       </div>
 
-      {visao === "vendas" && <RelatorioVendasComodato comodatos={comodatos} empresa={empresa} />}
+      {visao === "vendas" && <RelatorioVendasComodato comodatos={comodatos} empresa={empresa} vendedores={vendedoresUsados} />}
       {visao === "lista" && <>
 
       {ok && <div style={alertaOk}>{ok}</div>}
@@ -217,7 +234,12 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
         {chip("devolvido", "Devolvidos")}
         {chip("vencido", "Não Devolvidos")}
         {chip("entregar", "🚚 Gás a entregar")}
-        <input style={{ ...inputStyle, width: 240, padding: "8px 12px", marginLeft: "auto" }} placeholder="🔍 Buscar cliente, produto, telefone" value={busca} onChange={(e) => setBusca(e.target.value)} />
+        <select style={{ ...inputStyle, width: 200, padding: "8px 10px", marginLeft: "auto", color: filtroVend ? "#FCD34D" : undefined }} value={filtroVend} onChange={(e) => setFiltroVend(e.target.value)} title="Filtrar por vendedor">
+          <option value="">🧑‍💼 Todos os vendedores</option>
+          {vendedoresUsados.map((v) => <option key={v} value={v}>🧑‍💼 {v} ({comodatos.filter((c) => c.vendedor === v).length})</option>)}
+          <option value="__sem__">— Sem vendedor ({comodatos.filter((c) => !c.vendedor).length})</option>
+        </select>
+        <input style={{ ...inputStyle, width: 240, padding: "8px 12px" }} placeholder="🔍 Buscar cliente, produto, telefone" value={busca} onChange={(e) => setBusca(e.target.value)} />
         {lista.length > 0 && <>
           <button style={{ ...miniBtn, background: "#DC2626", padding: "8px 12px" }} onClick={() => imprimirLista("pdf")} title="Baixar a lista em PDF">📄 PDF</button>
           <button style={{ ...miniBtn, background: "#374151", padding: "8px 12px" }} onClick={() => imprimirLista()} title="Imprimir a lista">🖨️</button>
@@ -250,6 +272,7 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
                       </div>
                       <div style={{ fontSize: 13, color: "#CBD5E1", marginTop: 3 }}>👤 <b>{c.cliente}</b>{c.telefone && <span style={{ color: "#94A3B8" }}> · 📱 {c.telefone}</span>}</div>
                       {c.endereco && <div style={{ fontSize: 12, color: "#94A3B8", marginTop: 2 }}>📍 {c.endereco}</div>}
+                      {c.vendedor && <div style={{ fontSize: 12, color: "#A5B4FC", marginTop: 2 }}>🧑‍💼 Vendedor: <b>{c.vendedor}</b></div>}
                       <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 3 }}>
                         Emprestado em {dataBR(c.dataEmprestimo)}
                         {c.previsao && <> · devolução prevista {dataBR(c.previsao)}</>}
@@ -289,7 +312,7 @@ export default function ComodatoTab({ comodatos = [], setComodatos, empresas = [
       </>}
 
       {modal?.tipo === "form" && (
-        <FormComodato comodatos={comodatos} setComodatos={setComodatos} id={modal.id} currentUser={currentUser}
+        <FormComodato comodatos={comodatos} setComodatos={setComodatos} id={modal.id} currentUser={currentUser} nomesVendedores={nomesVendedores}
           onFechar={() => setModal(null)} onSalvo={(m, novo) => { setModal(null); avisar(m); if (novo && confirm("Imprimir o termo de comodato agora?")) imprimirTermo(novo); }} />
       )}
       {modal?.tipo === "venda" && (
@@ -323,7 +346,7 @@ function Modal({ titulo, onFechar, children }) {
   );
 }
 
-function FormComodato({ comodatos, setComodatos, id, currentUser, onFechar, onSalvo }) {
+function FormComodato({ comodatos, setComodatos, id, currentUser, onFechar, onSalvo, nomesVendedores = [] }) {
   const original = id ? comodatos.find((c) => c.id === id) : null;
   const [form, setForm] = useState(() => (original ? {
     ...FORM_VAZIO, ...original, quantidade: String(original.quantidade).replace(".", ","),
@@ -356,7 +379,7 @@ function FormComodato({ comodatos, setComodatos, id, currentUser, onFechar, onSa
     if (original && quantidade < qtdDevolvida(original)) { setErro(`Já foram devolvidos ${fmtQtd(qtdDevolvida(original))}. A quantidade não pode ser menor.`); return; }
     const dados = {
       produto, quantidade, unidade: (form.unidade || "un").trim(), cliente, telefone: form.telefone.trim(),
-      documento: (form.documento || "").trim(), endereco: (form.endereco || "").trim(),
+      documento: (form.documento || "").trim(), endereco: (form.endereco || "").trim(), vendedor: (form.vendedor || "").trim().toUpperCase(),
       dataEmprestimo: form.dataEmprestimo || hojeISO(), previsao: form.previsao || "", obs: form.obs.trim(),
     };
     if (original) {
@@ -391,6 +414,16 @@ function FormComodato({ comodatos, setComodatos, id, currentUser, onFechar, onSa
         </div>
         <div><label style={labelStyle}>CPF / CNPJ</label><input style={inputStyle} placeholder="Opcional (sai no termo)" {...campo("documento")} /></div>
         <div style={{ gridColumn: "1 / -1" }}><label style={labelStyle}>Endereço</label><input style={inputStyle} placeholder="Opcional (sai no termo)" {...campo("endereco")} /></div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={labelStyle}>🧑‍💼 Vendedor responsável</label>
+          <input style={inputStyle} list="comod-vend-form" placeholder="Escolha ou digite o vendedor" {...campo("vendedor")} />
+          <datalist id="comod-vend-form">{nomesVendedores.map((n) => <option key={n} value={n} />)}</datalist>
+          {!form.vendedor && vendedorNasObs(form.obs) && (
+            <button type="button" style={{ ...miniBtn, background: "#4338CA", marginTop: 6 }} onClick={() => setForm((f) => ({ ...f, vendedor: vendedorNasObs(f.obs) }))}>
+              💡 Achei nas observações: usar <b>{vendedorNasObs(form.obs)}</b>
+            </button>
+          )}
+        </div>
         <div><label style={labelStyle}>Data do empréstimo</label><input style={inputStyle} type="date" {...campo("dataEmprestimo")} /></div>
         <div><label style={labelStyle}>Previsão de devolução</label><input style={inputStyle} type="date" {...campo("previsao")} /></div>
         <div style={{ gridColumn: "1 / -1" }}>
@@ -561,7 +594,9 @@ function FormVenda({ comodato, comodatos, setComodatos, currentUser, onFechar, o
 }
 
 /* ══════ RELATÓRIO DE VENDAS POR PERÍODO ══════ */
-function RelatorioVendasComodato({ comodatos, empresa }) {
+function RelatorioVendasComodato({ comodatos, empresa, vendedores = [] }) {
+  const [vendFiltro, setVendFiltro] = useState("");
+  const [tipo, setTipo] = useState("vendas"); // vendas | baixas
   const [de, setDe] = useState(inicioMes());
   const [ate, setAte] = useState(hojeISO());
   const [produto, setProduto] = useState("");
@@ -576,13 +611,15 @@ function RelatorioVendasComodato({ comodatos, empresa }) {
     const b = normNome(busca);
     comodatos
       .filter((c) => !produto || c.produto === produto)
+      .filter((c) => !vendFiltro || (vendFiltro === "__sem__" ? !c.vendedor : c.vendedor === vendFiltro))
       .filter((c) => !b || [c.cliente, c.telefone, c.obs].some((x) => normNome(x).includes(b)))
       .forEach((c) => {
         const k = normNome(c.cliente);
         const sv = somaVendas(c.vendas, de, ate);
-        const e = m.get(k) || { cliente: c.cliente, telefone: c.telefone || "", endereco: c.endereco || "", produtos: new Set(), qtd: 0, valor: 0, n: 0, falta: 0, vendas: [] };
+        const e = m.get(k) || { cliente: c.cliente, telefone: c.telefone || "", endereco: c.endereco || "", vendedores: new Set(), produtos: new Set(), qtd: 0, valor: 0, n: 0, falta: 0, vendas: [] };
         e.falta = r2(e.falta + sv.lista.filter((v) => !v.baixa).reduce((t, v) => t + (Number(v.quantidade) || 0), 0));
         e.produtos.add(c.produto);
+        if (c.vendedor) e.vendedores.add(c.vendedor);
         if (!e.telefone && c.telefone) e.telefone = c.telefone;
         if (!e.endereco && c.endereco) e.endereco = c.endereco;
         e.qtd = r2(e.qtd + sv.qtd); e.valor = r2(e.valor + sv.valor); e.n += sv.n;
@@ -591,23 +628,76 @@ function RelatorioVendasComodato({ comodatos, empresa }) {
       });
     return [...m.values()]
       .filter((e) => incluirZerados || e.n > 0)
-      .map((e) => ({ ...e, produtos: [...e.produtos].join(", "), vendas: e.vendas.sort((a, b2) => (a.data || "").localeCompare(b2.data || "")) }))
-      .sort((a, b2) => b2.qtd - a.qtd || a.cliente.localeCompare(b2.cliente));
-  }, [comodatos, de, ate, produto, busca, incluirZerados]);
+      .map((e) => ({ ...e, produtos: [...e.produtos].join(", "), vendedor: [...e.vendedores].join(", "), vendas: e.vendas.sort((a, b2) => (a.data || "").localeCompare(b2.data || "")) }))
+      .sort((a, b2) => ordemAlfa(a, b2));
+  }, [comodatos, de, ate, produto, busca, incluirZerados, vendFiltro]);
 
   const tot = linhas.reduce((t, e) => ({ qtd: r2(t.qtd + e.qtd), valor: r2(t.valor + e.valor), n: t.n + e.n, falta: r2(t.falta + e.falta), clientes: t.clientes + (e.n > 0 ? 1 : 0) }), { qtd: 0, valor: 0, n: 0, falta: 0, clientes: 0 });
 
+  // ── BAIXAS (entregas) no período: conta pela DATA DA ENTREGA ──
+  const vendedoresBaixa = useMemo(() => [...new Set([...vendedores, ...comodatos.flatMap((c) => (c.vendas || []).map((v) => v.baixa?.vendedor))].filter(Boolean))].sort((a, b2) => a.localeCompare(b2, "pt-BR")), [comodatos, vendedores]);
+  const linhasBaixa = useMemo(() => {
+    const m = new Map();
+    const b = normNome(busca);
+    comodatos
+      .filter((c) => !produto || c.produto === produto)
+      .filter((c) => !b || [c.cliente, c.telefone, c.obs].some((x) => normNome(x).includes(b)))
+      .forEach((c) => {
+        const ents = (c.vendas || []).filter((v) => v.baixa && v.baixa.data >= de && v.baixa.data <= ate)
+          .filter((v) => !vendFiltro || (vendFiltro === "__sem__" ? !(v.baixa.vendedor || c.vendedor) : (v.baixa.vendedor || c.vendedor) === vendFiltro));
+        if (!ents.length) return;
+        const k = normNome(c.cliente);
+        const e = m.get(k) || { cliente: c.cliente, telefone: c.telefone || "", endereco: c.endereco || "", produtos: new Set(), qtd: 0, valor: 0, entregas: [] };
+        e.produtos.add(c.produto);
+        ents.forEach((v) => {
+          e.qtd = r2(e.qtd + (Number(v.quantidade) || 0)); e.valor = r2(e.valor + (Number(v.valor) || 0));
+          e.entregas.push({ id: v.id, dataBaixa: v.baixa.data, dataVenda: v.data, qtd: Number(v.quantidade) || 0, valor: Number(v.valor) || 0, vendedor: v.baixa.vendedor || c.vendedor || "", obs: v.baixa.obs || "" });
+        });
+        m.set(k, e);
+      });
+    return [...m.values()].map((e) => ({ ...e, produtos: [...e.produtos].join(", "),
+      entregas: e.entregas.sort((a, b2) => a.dataBaixa.localeCompare(b2.dataBaixa)),
+      vendedores: [...new Set(e.entregas.map((x) => x.vendedor).filter(Boolean))].join(", "),
+      ultima: e.entregas.reduce((u, x) => (x.dataBaixa > u ? x.dataBaixa : u), "") })).sort(ordemAlfa);
+  }, [comodatos, de, ate, produto, busca, vendFiltro]);
+  const totB = linhasBaixa.reduce((t, e) => ({ qtd: r2(t.qtd + e.qtd), valor: r2(t.valor + e.valor), n: t.n + e.entregas.length, clientes: t.clientes + 1 }), { qtd: 0, valor: 0, n: 0, clientes: 0 });
+
+  const imprimirBaixas = (modo) => {
+    const vTxt = vendFiltro ? (vendFiltro === "__sem__" ? "Sem vendedor" : vendFiltro) : "";
+    const corpo = linhasBaixa.map((e, i) => {
+      let h = `<tr><td>${i + 1}</td><td><b>${esc(e.cliente)}</b>${e.telefone ? `<br><span class="sub">📱 ${esc(e.telefone)}</span>` : ""}${e.endereco ? `<br><span class="sub">📍 ${esc(e.endereco)}</span>` : ""}</td>
+        <td>${esc(e.vendedores || "—")}</td><td class="ctr">${e.entregas.length}</td><td>${dataBR(e.ultima)}</td><td class="r"><b>${fmtQtd(e.qtd)}</b></td><td class="r">${fmt(e.valor)}</td></tr>`;
+      if (detalhado) h += e.entregas.map((x) => `<tr style="color:#555;font-size:10px"><td></td><td>↳ entregue ${dataBR(x.dataBaixa)} · venda de ${dataBR(x.dataVenda)}${x.obs ? " · " + esc(x.obs) : ""}</td>
+        <td>${esc(x.vendedor || "")}</td><td></td><td></td><td class="r">${fmtQtd(x.qtd)}</td><td class="r">${fmt(x.valor)}</td></tr>`).join("");
+      return h;
+    }).join("");
+    abrirImpressao(`Baixas Comodato ${dataBR(de)} a ${dataBR(ate)}${produto ? " - " + produto : ""}${vTxt ? " - " + vTxt : ""}`, `
+      <h1>🚚 Relatório de Baixas — Gás Entregue aos Comodatários</h1>
+      <div class="sub">${esc(empresa?.nome || "")} · Período da entrega: <b>${dataBR(de)} a ${dataBR(ate)}</b>${produto ? " · Produto: <b>" + esc(produto) + "</b>" : ""}${vTxt ? " · Vendedor: <b>" + esc(vTxt) + "</b>" : ""} · emitido em ${dataBR(hojeISO())}</div>
+      <div class="cards">
+        <div class="c"><div class="l">Gás entregue</div><div class="v">${fmtQtd(totB.qtd)}</div></div>
+        <div class="c"><div class="l">Valor das vendas entregues</div><div class="v">${fmt(totB.valor)}</div></div>
+        <div class="c"><div class="l">Clientes atendidos</div><div class="v">${totB.clientes}</div></div>
+        <div class="c"><div class="l">Baixas</div><div class="v">${totB.n}</div></div>
+      </div>
+      <table><thead><tr><th>#</th><th>Cliente</th><th>Vendedor</th><th class="ctr">Baixas</th><th>Última entrega</th><th class="r">Gás entregue</th><th class="r">Valor</th></tr></thead>
+      <tbody>${corpo}</tbody>
+      <tfoot><tr><td></td><td colspan="2">TOTAL (${linhasBaixa.length} cliente(s))</td><td class="ctr">${totB.n}</td><td></td><td class="r">${fmtQtd(totB.qtd)}</td><td class="r">${fmt(totB.valor)}</td></tr></tfoot></table>`, { modo });
+  };
+
   const imprimir = (modo) => {
+    if (tipo === "baixas") return imprimirBaixas(modo);
     const corpo = linhas.map((e, i) => {
-      let h = `<tr><td>${i + 1}</td><td><b>${esc(e.cliente)}</b>${e.telefone ? `<br><span class="sub">📱 ${esc(e.telefone)}</span>` : ""}${e.endereco ? `<br><span class="sub">📍 ${esc(e.endereco)}</span>` : ""}</td><td>${esc(e.produtos)}</td>
+      let h = `<tr><td>${i + 1}</td><td><b>${esc(e.cliente)}</b>${e.telefone ? `<br><span class="sub">📱 ${esc(e.telefone)}</span>` : ""}${e.endereco ? `<br><span class="sub">📍 ${esc(e.endereco)}</span>` : ""}${e.vendedor ? `<br><span class="sub">🧑‍💼 ${esc(e.vendedor)}</span>` : ""}</td><td>${esc(e.produtos)}</td>
         <td class="ctr">${e.n}</td><td class="r"><b>${fmtQtd(e.qtd)}</b></td><td class="r">${fmtQtd(r2(e.qtd - e.falta))}</td><td class="r">${e.falta > 0 ? "<b>" + fmtQtd(e.falta) + "</b>" : "—"}</td><td class="r"><b>${fmt(e.valor)}</b></td></tr>`;
       if (detalhado && e.vendas.length) h += e.vendas.map((v) => `<tr style="color:#555;font-size:10px"><td></td><td colspan="2">↳ ${dataBR(v.data)}${v.obs ? " · " + esc(v.obs) : ""}</td><td></td>
         <td class="r">${fmtQtd(v.quantidade)}${v.valorUnit ? " × " + fmt(v.valorUnit) : ""}</td><td colspan="2" class="r">${v.baixa ? "entregue " + dataBR(v.baixa.data) + (v.baixa.vendedor ? " (" + esc(v.baixa.vendedor) + ")" : "") : "a entregar"}</td><td class="r">${fmt(v.valor)}</td></tr>`).join("");
       return h;
     }).join("");
-    abrirImpressao(`Vendas Comodato ${dataBR(de)} a ${dataBR(ate)}${produto ? " - " + produto : ""}`, `
+    const vTxt = vendFiltro ? (vendFiltro === "__sem__" ? "Sem vendedor" : vendFiltro) : "";
+    abrirImpressao(`Vendas Comodato ${dataBR(de)} a ${dataBR(ate)}${produto ? " - " + produto : ""}${vTxt ? " - " + vTxt : ""}`, `
       <h1>💰 Relatório de Vendas — Comodatários</h1>
-      <div class="sub">${esc(empresa?.nome || "")} · Período: <b>${dataBR(de)} a ${dataBR(ate)}</b>${produto ? " · Produto: <b>" + esc(produto) + "</b>" : ""} · emitido em ${dataBR(hojeISO())}</div>
+      <div class="sub">${esc(empresa?.nome || "")} · Período: <b>${dataBR(de)} a ${dataBR(ate)}</b>${produto ? " · Produto: <b>" + esc(produto) + "</b>" : ""}${vTxt ? " · Vendedor: <b>" + esc(vTxt) + "</b>" : ""} · emitido em ${dataBR(hojeISO())}</div>
       <div class="cards">
         <div class="c"><div class="l">Quantidade vendida</div><div class="v">${fmtQtd(tot.qtd)}</div></div>
         <div class="c"><div class="l">Valor vendido</div><div class="v">${fmt(tot.valor)}</div></div>
@@ -628,7 +718,13 @@ function RelatorioVendasComodato({ comodatos, empresa }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={card}>
-        <h2 style={cardTitle}>📊 Relatório de Vendas por Período</h2>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+          {[["vendas", "💰 Vendas", "#D97706"], ["baixas", "🚚 Baixas (entregas)", "#0891B2"]].map(([k, l, cor]) => (
+            <button key={k} onClick={() => setTipo(k)} style={{ ...btn, padding: "8px 16px", background: tipo === k ? cor : "#1E293B", border: `1px solid ${cor}88` }}>{l}</button>
+          ))}
+        </div>
+        <h2 style={cardTitle}>{tipo === "baixas" ? "🚚 Relatório de Baixas (gás entregue) por Período" : "📊 Relatório de Vendas por Período"}</h2>
+        {tipo === "baixas" && <div style={{ fontSize: 12, color: "#64748B", marginTop: -8, marginBottom: 10 }}>Conta pela <b>data da entrega</b> (baixa).</div>}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 10 }}>
           <div><label style={labelStyle}>De</label><input style={inputStyle} type="date" value={de} onChange={(e) => setDe(e.target.value)} /></div>
           <div><label style={labelStyle}>Até</label><input style={inputStyle} type="date" value={ate} onChange={(e) => setAte(e.target.value)} /></div>
@@ -639,6 +735,14 @@ function RelatorioVendasComodato({ comodatos, empresa }) {
               {produtos.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
+          <div>
+            <label style={labelStyle}>Vendedor</label>
+            <select style={inputStyle} value={vendFiltro} onChange={(e) => setVendFiltro(e.target.value)}>
+              <option value="">Todos os vendedores</option>
+              {(tipo === "baixas" ? vendedoresBaixa : vendedores).map((v) => <option key={v} value={v}>{v}</option>)}
+              <option value="__sem__">— Sem vendedor</option>
+            </select>
+          </div>
           <div><label style={labelStyle}>Cliente</label><input style={inputStyle} placeholder="🔍 Buscar" value={busca} onChange={(e) => setBusca(e.target.value)} /></div>
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
@@ -647,20 +751,74 @@ function RelatorioVendasComodato({ comodatos, empresa }) {
           {atalho("Mês passado", mesPassado[0], mesPassado[1])}
           {atalho("Este ano", h.slice(0, 4) + "-01-01", h)}
           <label style={{ fontSize: 12, color: "#CBD5E1", display: "flex", gap: 6, alignItems: "center", marginLeft: 8, cursor: "pointer" }}>
-            <input type="checkbox" checked={incluirZerados} onChange={(e) => setIncluirZerados(e.target.checked)} /> Mostrar quem não vendeu
+            <input type="checkbox" checked={incluirZerados} onChange={(e) => setIncluirZerados(e.target.checked)} disabled={tipo === "baixas"} /> Mostrar quem não vendeu
           </label>
           <label style={{ fontSize: 12, color: "#CBD5E1", display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
             <input type="checkbox" checked={detalhado} onChange={(e) => setDetalhado(e.target.checked)} /> Detalhar cada venda
           </label>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-            <button style={{ ...btn, background: "#DC2626", padding: "8px 14px" }} onClick={() => imprimir("pdf")} disabled={!linhas.length}>📄 Salvar PDF</button>
-            <button style={{ ...btn, background: "#374151", padding: "8px 14px" }} onClick={() => imprimir()} disabled={!linhas.length}>🖨️ Imprimir</button>
+            <button style={{ ...btn, background: "#DC2626", padding: "8px 14px" }} onClick={() => imprimir("pdf")} disabled={!(tipo === "baixas" ? linhasBaixa : linhas).length}>📄 Salvar PDF</button>
+            <button style={{ ...btn, background: "#374151", padding: "8px 14px" }} onClick={() => imprimir()} disabled={!(tipo === "baixas" ? linhasBaixa : linhas).length}>🖨️ Imprimir</button>
           </div>
         </div>
       </div>
 
+      {tipo === "baixas" && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 }}>
+            {[["Gás entregue", fmtQtd(totB.qtd), "#67E8F9"], ["Valor das vendas entregues", fmt(totB.valor), "#10B981"], ["Clientes atendidos", totB.clientes, "#A5B4FC"], ["Baixas", totB.n, "#94A3B8"]].map(([l, v, cor]) => (
+              <div key={l} style={{ background: "#0F172A", border: "1px solid #1E293B", borderRadius: 12, padding: 12 }}>
+                <div style={{ fontSize: 10, color: "#94A3B8", textTransform: "uppercase" }}>{l}</div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: cor }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={card}>
+            {linhasBaixa.length === 0 ? (
+              <div style={{ textAlign: "center", color: "#64748B", padding: 24 }}>Nenhuma baixa neste período. Use o botão <b style={{ color: "#67E8F9" }}>🚚 Baixar gás</b> em cada comodatário.</div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 560 }}>
+                  <thead><tr style={{ color: "#94A3B8", fontSize: 11, textTransform: "uppercase", textAlign: "left" }}>
+                    <th style={{ padding: 8 }}>Cliente</th><th style={{ padding: 8 }}>Vendedor</th><th style={{ padding: 8, textAlign: "center" }}>Baixas</th>
+                    <th style={{ padding: 8 }}>Última entrega</th><th style={{ padding: 8, textAlign: "right" }}>Gás entregue</th><th style={{ padding: 8, textAlign: "right" }}>Valor</th>
+                  </tr></thead>
+                  <tbody>
+                    {linhasBaixa.map((e) => (
+                      <Fragment key={e.cliente}>
+                        <tr style={{ borderTop: "1px solid #1E293B", color: "#F1F5F9" }}>
+                          <td style={{ padding: 8 }}><b>{e.cliente}</b>{e.telefone && <div style={{ fontSize: 11, color: "#94A3B8" }}>📱 {e.telefone}</div>}{e.endereco && <div style={{ fontSize: 11, color: "#94A3B8" }}>📍 {e.endereco}</div>}</td>
+                          <td style={{ padding: 8, fontSize: 12, color: "#A5B4FC" }}>{e.vendedores || "—"}</td>
+                          <td style={{ padding: 8, textAlign: "center" }}>{e.entregas.length}</td>
+                          <td style={{ padding: 8 }}>{dataBR(e.ultima)}</td>
+                          <td style={{ padding: 8, textAlign: "right", fontWeight: 800, color: "#67E8F9" }}>{fmtQtd(e.qtd)}</td>
+                          <td style={{ padding: 8, textAlign: "right", fontWeight: 800, color: "#10B981" }}>{fmt(e.valor)}</td>
+                        </tr>
+                        {detalhado && e.entregas.map((x) => (
+                          <tr key={x.id} style={{ color: "#94A3B8", fontSize: 11 }}>
+                            <td style={{ padding: "2px 8px 2px 20px" }}>↳ entregue {dataBR(x.dataBaixa)} · venda de {dataBR(x.dataVenda)}{x.obs ? ` · ${x.obs}` : ""}</td>
+                            <td style={{ padding: "2px 8px" }}>{x.vendedor}</td><td></td><td></td>
+                            <td style={{ padding: "2px 8px", textAlign: "right" }}>{fmtQtd(x.qtd)}</td>
+                            <td style={{ padding: "2px 8px", textAlign: "right" }}>{fmt(x.valor)}</td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                  <tfoot><tr style={{ borderTop: "2px solid #334155", fontWeight: 900, color: "#F1F5F9" }}>
+                    <td style={{ padding: 8 }} colSpan={2}>TOTAL ({linhasBaixa.length} cliente(s))</td><td style={{ padding: 8, textAlign: "center" }}>{totB.n}</td><td></td>
+                    <td style={{ padding: 8, textAlign: "right", color: "#67E8F9" }}>{fmtQtd(totB.qtd)}</td><td style={{ padding: 8, textAlign: "right", color: "#10B981" }}>{fmt(totB.valor)}</td>
+                  </tr></tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {tipo === "vendas" && <>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 }}>
-        {[["Quantidade vendida", fmtQtd(tot.qtd), "#FCD34D"], ["Valor vendido", fmt(tot.valor), "#10B981"], ["Clientes que venderam", tot.clientes, "#A5B4FC"], ["Falta entregar", fmtQtd(tot.falta), "#FDBA74"]].map(([l, v, cor]) => (
+        {[["Quantidade vendida", fmtQtd(tot.qtd), "#FCD34D"], ["Valor vendido", fmt(tot.valor), "#10B981"], ["Entregue", fmtQtd(r2(tot.qtd - tot.falta)), "#67E8F9"], ["Falta entregar", fmtQtd(tot.falta), "#FDBA74"]].map(([l, v, cor]) => (
           <div key={l} style={{ background: "#0F172A", border: "1px solid #1E293B", borderRadius: 12, padding: 12 }}>
             <div style={{ fontSize: 10, color: "#94A3B8", textTransform: "uppercase" }}>{l}</div>
             <div style={{ fontSize: 22, fontWeight: 900, color: cor }}>{v}</div>
@@ -676,16 +834,17 @@ function RelatorioVendasComodato({ comodatos, empresa }) {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 560 }}>
               <thead><tr style={{ color: "#94A3B8", fontSize: 11, textTransform: "uppercase", textAlign: "left" }}>
                 <th style={{ padding: 8 }}>Cliente</th><th style={{ padding: 8 }}>Produto</th><th style={{ padding: 8, textAlign: "center" }}>Lanç.</th>
-                <th style={{ padding: 8, textAlign: "right" }}>Qtd vendida</th><th style={{ padding: 8, textAlign: "right" }}>Falta entregar</th><th style={{ padding: 8, textAlign: "right" }}>Valor</th>
+                <th style={{ padding: 8, textAlign: "right" }}>Qtd vendida</th><th style={{ padding: 8, textAlign: "right" }}>Entregue</th><th style={{ padding: 8, textAlign: "right" }}>Falta entregar</th><th style={{ padding: 8, textAlign: "right" }}>Valor</th>
               </tr></thead>
               <tbody>
                 {linhas.map((e) => (
                   <Fragment key={e.cliente}>
                     <tr style={{ borderTop: "1px solid #1E293B", color: e.n ? "#F1F5F9" : "#64748B" }}>
-                      <td style={{ padding: 8 }}><b>{e.cliente}</b>{e.telefone && <div style={{ fontSize: 11, color: "#94A3B8" }}>📱 {e.telefone}</div>}{e.endereco && <div style={{ fontSize: 11, color: "#94A3B8" }}>📍 {e.endereco}</div>}</td>
+                      <td style={{ padding: 8 }}><b>{e.cliente}</b>{e.telefone && <div style={{ fontSize: 11, color: "#94A3B8" }}>📱 {e.telefone}</div>}{e.endereco && <div style={{ fontSize: 11, color: "#94A3B8" }}>📍 {e.endereco}</div>}{e.vendedor && <div style={{ fontSize: 11, color: "#A5B4FC" }}>🧑‍💼 {e.vendedor}</div>}</td>
                       <td style={{ padding: 8, fontSize: 12 }}>{e.produtos}</td>
                       <td style={{ padding: 8, textAlign: "center" }}>{e.n}</td>
                       <td style={{ padding: 8, textAlign: "right", fontWeight: 800, color: e.n ? "#FCD34D" : undefined }}>{fmtQtd(e.qtd)}</td>
+                      <td style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "#67E8F9" }}>{e.n ? fmtQtd(r2(e.qtd - e.falta)) : "—"}</td>
                       <td style={{ padding: 8, textAlign: "right", fontWeight: 700, color: e.falta > 0 ? "#FDBA74" : "#475569" }}>{e.falta > 0 ? fmtQtd(e.falta) : "—"}</td>
                       <td style={{ padding: 8, textAlign: "right", fontWeight: 800, color: e.n ? "#10B981" : undefined }}>{fmt(e.valor)}</td>
                     </tr>
@@ -693,7 +852,7 @@ function RelatorioVendasComodato({ comodatos, empresa }) {
                       <tr key={v.id} style={{ color: "#94A3B8", fontSize: 11 }}>
                         <td style={{ padding: "2px 8px 2px 20px" }} colSpan={2}>↳ {dataBR(v.data)}{v.obs ? ` · ${v.obs}` : ""}</td><td></td>
                         <td style={{ padding: "2px 8px", textAlign: "right" }}>{fmtQtd(v.quantidade)}{v.valorUnit ? ` × ${fmt(v.valorUnit)}` : ""}</td>
-                        <td style={{ padding: "2px 8px", textAlign: "right", color: v.baixa ? "#6EE7B7" : "#FDBA74" }}>{v.baixa ? `✅ ${dataBR(v.baixa.data)}${v.baixa.vendedor ? " · " + v.baixa.vendedor : ""}` : "⏳ a entregar"}</td>
+                        <td colSpan={2} style={{ padding: "2px 8px", textAlign: "right", color: v.baixa ? "#6EE7B7" : "#FDBA74" }}>{v.baixa ? `✅ ${dataBR(v.baixa.data)}${v.baixa.vendedor ? " · " + v.baixa.vendedor : ""}` : "⏳ a entregar"}</td>
                         <td style={{ padding: "2px 8px", textAlign: "right" }}>{fmt(v.valor)}</td>
                       </tr>
                     ))}
@@ -702,12 +861,13 @@ function RelatorioVendasComodato({ comodatos, empresa }) {
               </tbody>
               <tfoot><tr style={{ borderTop: "2px solid #334155", fontWeight: 900, color: "#F1F5F9" }}>
                 <td style={{ padding: 8 }} colSpan={2}>TOTAL ({linhas.length} cliente(s))</td><td style={{ padding: 8, textAlign: "center" }}>{tot.n}</td>
-                <td style={{ padding: 8, textAlign: "right", color: "#FCD34D" }}>{fmtQtd(tot.qtd)}</td><td style={{ padding: 8, textAlign: "right", color: "#FDBA74" }}>{fmtQtd(tot.falta)}</td><td style={{ padding: 8, textAlign: "right", color: "#10B981" }}>{fmt(tot.valor)}</td>
+                <td style={{ padding: 8, textAlign: "right", color: "#FCD34D" }}>{fmtQtd(tot.qtd)}</td><td style={{ padding: 8, textAlign: "right", color: "#67E8F9" }}>{fmtQtd(r2(tot.qtd - tot.falta))}</td><td style={{ padding: 8, textAlign: "right", color: "#FDBA74" }}>{fmtQtd(tot.falta)}</td><td style={{ padding: 8, textAlign: "right", color: "#10B981" }}>{fmt(tot.valor)}</td>
               </tr></tfoot>
             </table>
           </div>
         )}
       </div>
+      </>}
     </div>
   );
 }
@@ -717,7 +877,7 @@ function FormBaixa({ comodato, comodatos, setComodatos, currentUser, onFechar, o
   const pendentes = comodato ? [...vendasAEntregar(comodato)].sort((a, b) => (a.data || "").localeCompare(b.data || "")) : [];
   const [marcadas, setMarcadas] = useState(() => new Set(pendentes.map((v) => v.id)));
   const [data, setData] = useState(hojeISO());
-  const [vendedor, setVendedor] = useState("");
+  const [vendedor, setVendedor] = useState(comodato?.vendedor || "");
   const [obs, setObs] = useState("");
   const [erro, setErro] = useState("");
   const nomesVendedores = useMemo(() => [...new Set(comodatos.flatMap((c) => (c.vendas || []).map((v) => v.baixa?.vendedor)).filter(Boolean))].sort(), [comodatos]);
